@@ -1,6 +1,8 @@
 package unimet.avilaos.so.proceso;
 
+import unimet.avilaos.hardware.disco.TipoOperacionES;
 import unimet.avilaos.sincronizacion.BufferAcotado;
+import unimet.avilaos.so.archivos.ModoUsuario;
 
 
 /**
@@ -52,6 +54,15 @@ public class PCB {
     private boolean reservoHueco = false;
     private long bloqueadoDesde = -1;
     private long ciclosEnSemaforos = 0;
+
+    // E/S de archivo (Proyecto 2)
+    private TipoOperacionES operacionES;
+    private String rutaArchivo;
+    private int tamanoArchivo = 0;
+    private String nuevoNombre;
+    private String usuario = "admin";
+    private ModoUsuario modoUsuario = ModoUsuario.ADMINISTRADOR;
+    private boolean solicitudHecha = false;
 
     public PCB(long id, String nombre, int idComputador, TipoProceso tipo, int prioridad,
             int memoria, int instrucciones, int deadline, long cicloCreacion) {
@@ -205,6 +216,36 @@ public class PCB {
     }
 
     /**
+     * Proceso de E/S de archivo: que operacion hace, sobre que ruta y a nombre de quien.
+     * @param tamanoBloques solo para CREAR (0 crea un directorio)
+     * @param nuevoNombre   solo para ACTUALIZAR; null si no se renombra
+     */
+    public void configurarArchivo(TipoOperacionES operacion, String ruta, int tamanoBloques,
+            String nuevoNombre, String usuario, ModoUsuario modo) {
+        if (tipo != TipoProceso.ES_ARCHIVO) {
+            throw new IllegalStateException("Solo los procesos de E/S de archivo trabajan sobre el disco");
+        }
+        if (operacion == null || !operacion.esDeArchivo()) {
+            throw new IllegalArgumentException("La operacion debe ser crear, leer, actualizar o eliminar");
+        }
+        if (ruta == null || !ruta.startsWith("/")) {
+            throw new IllegalArgumentException("La ruta debe empezar con /");
+        }
+        if (tamanoBloques < 0) {
+            throw new IllegalArgumentException("El tamano del archivo no puede ser negativo");
+        }
+        if (usuario == null || usuario.trim().isEmpty() || modo == null) {
+            throw new IllegalArgumentException("Falta el usuario o el modo");
+        }
+        this.operacionES = operacion;
+        this.rutaArchivo = ruta;
+        this.tamanoArchivo = tamanoBloques;
+        this.nuevoNombre = nuevoNombre;
+        this.usuario = usuario.trim();
+        this.modoUsuario = modo;
+    }
+
+    /**
      * Un productor/consumidor solo termina en un punto seguro: fuera de la
      * region critica y sin huecos reservados.
      */
@@ -248,6 +289,16 @@ public class PCB {
     public long getBloqueadoDesde() { return bloqueadoDesde; }
     public void setBloqueadoDesde(long c) { bloqueadoDesde = c; }
     public long getCiclosEnSemaforos() { return ciclosEnSemaforos; }
+
+    public TipoOperacionES getOperacionES() { return operacionES; }
+    public String getRutaArchivo() { return rutaArchivo; }
+    public int getTamanoArchivo() { return tamanoArchivo; }
+    public String getNuevoNombre() { return nuevoNombre; }
+    public String getUsuario() { return usuario; }
+    public ModoUsuario getModoUsuario() { return modoUsuario; }
+    /** true cuando el proceso ya le pidio su operacion al disco. */
+    public boolean solicitudHecha() { return solicitudHecha; }
+    public void marcarSolicitudHecha() { solicitudHecha = true; }
 
     public String getEtiqueta() { return "P" + id + "-C" + idComputador; }
 
