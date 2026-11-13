@@ -62,6 +62,28 @@ public class Cluster implements EnrutadorDespertar {
                 + (computadores.length == 1 ? " computador" : " computadores"));
     }
 
+    /**
+     * Arma el sistema del Proyecto 2 con lo que traen los dos JSON: un solo
+     * computador, el disco ya cargado y los procesos de E/S.
+     * Lanza IllegalArgumentException si algo de la configuracion no sirve.
+     */
+    public static Cluster crear(ConfiguracionProcesos cfg, SistemaArchivos archivos) {
+        Cluster c = new Cluster(new int[]{cfg.ram}, new TipoPolitica[]{cfg.politica},
+                cfg.duracionCiclo, cfg.quantum, 0);
+        try {
+            archivos.getDisco().redimensionarSwap(cfg.tamanoSwap);
+            archivos.getDisco().setPosicionesPorCiclo(cfg.posicionesPorCiclo);
+        } catch (IllegalStateException e) {
+            throw new IllegalArgumentException(e.getMessage());
+        }
+        c.instalarDisco(archivos, cfg.politicaDisco);
+        Recorrido<EspecificacionES> r = cfg.procesos.recorrido();
+        while (r.haySiguiente()) {
+            c.crearProcesoES(r.siguiente());
+        }
+        return c;
+    }
+
     // ------------------------------------------------------------- disco
 
     /**
