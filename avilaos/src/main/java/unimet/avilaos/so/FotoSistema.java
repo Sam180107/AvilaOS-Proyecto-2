@@ -30,6 +30,8 @@ public class FotoSistema {
         String extra;
         if (p.getEstado() == EstadoProceso.BLOQUEADO) {
             extra = p.getMotivoBloqueo().getEtiqueta();
+        } else if (p.getOperacionES() != null) {
+            extra = p.getOperacionES().getEtiqueta() + " " + p.getRutaArchivo();
         } else if (p.getFase() != null) {
             extra = p.getFase() + " (" + p.getElementosHechos() + "/" + p.getElementosRequeridos() + ")";
         } else {
