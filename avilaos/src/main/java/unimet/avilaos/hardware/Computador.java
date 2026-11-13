@@ -1,6 +1,7 @@
 package unimet.avilaos.hardware;
 
 import java.util.concurrent.Semaphore;
+import unimet.avilaos.hardware.disco.Disco;
 import unimet.avilaos.so.ParametrosSimulacion;
 import unimet.avilaos.so.RegistroEventos;
 import unimet.avilaos.so.SistemaOperativo;
@@ -19,6 +20,7 @@ public class Computador implements ComponenteDeReloj, RelojGlobal.Participante, 
 
     private final Semaphore inicioCiclo = new Semaphore(0);
     private RelojGlobal reloj;
+    private volatile Disco disco;
 
     public Computador(int id, int capacidadRam, PoliticaPlanificacion politica,
             ParametrosSimulacion parametros, RegistroEventos log) {
@@ -42,6 +44,16 @@ public class Computador implements ComponenteDeReloj, RelojGlobal.Participante, 
 
     public SistemaOperativo getOs() {
         return os;
+    }
+
+    /** Le conecta el disco local. Desde aqui el disco avanza con cada ciclo de este computador. */
+    public void instalarDisco(Disco disco) {
+        this.disco = disco;
+    }
+
+    /** Disco local, o null si este computador no tiene. */
+    public Disco getDisco() {
+        return disco;
     }
 
     /** Lo conecta al reloj global y arranca su hilo. */
@@ -75,10 +87,14 @@ public class Computador implements ComponenteDeReloj, RelojGlobal.Participante, 
         }
     }
 
-    /** Un ciclo: E/S -> el SO decide -> la CPU ejecuta -> el SO aplica. */
+    /** Un ciclo: E/S y disco -> el SO decide -> la CPU ejecuta -> el SO aplica. */
     @Override
     public void alTick(long ciclo) {
         os.getES().alTick(ciclo);
+        Disco d = disco;
+        if (d != null) {
+            d.alTick(ciclo);
+        }
         os.alTick(ciclo);
         cpu.alTick(ciclo);
         os.despuesDeEjecutar();
