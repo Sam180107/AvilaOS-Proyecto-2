@@ -4,7 +4,8 @@ public enum TipoProceso {
     CPU_BOUND("CPU bound", false),
     IO_BOUND("I/O bound", false),
     PRODUCTOR("Productor", true),
-    CONSUMIDOR("Consumidor", true);
+    CONSUMIDOR("Consumidor", true),
+    ES_ARCHIVO("E/S de archivo", false);
 
     private final String etiqueta;
     private final boolean usaBuffer;

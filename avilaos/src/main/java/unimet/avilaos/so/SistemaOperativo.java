@@ -10,10 +10,15 @@ import unimet.avilaos.hardware.DispositivoES;
 import unimet.avilaos.hardware.ManejadorInterrupciones;
 import unimet.avilaos.hardware.MemoriaPrincipal;
 import unimet.avilaos.hardware.ModoEjecucion;
+import unimet.avilaos.hardware.disco.SolicitudES;
 import unimet.avilaos.metricas.Estadisticas;
 import unimet.avilaos.sincronizacion.BufferAcotado;
 import unimet.avilaos.sincronizacion.Mutex;
 import unimet.avilaos.sincronizacion.SemaforoSO;
+import unimet.avilaos.so.archivos.OperacionRechazada;
+import unimet.avilaos.so.archivos.SistemaArchivos;
+import unimet.avilaos.so.disco.OyenteDisco;
+import unimet.avilaos.so.disco.PlanificadorDisco;
 import unimet.avilaos.so.planificacion.FabricaPoliticas;
 import unimet.avilaos.so.planificacion.PoliticaPlanificacion;
 import unimet.avilaos.so.planificacion.PoliticaRoundRobin;
@@ -33,8 +38,12 @@ import unimet.avilaos.so.proceso.TipoProceso;
  * a un buzon con su propio candado y se atienden al inicio del siguiente
  * ciclo, asi nunca se toman los candados de dos computadores a la vez.
  * Orden de candados: sistema operativo -> buffer -> buzon.
+ *
+ * Disco: un proceso de E/S de archivo pide su operacion en modo SO, queda
+ * bloqueado y su solicitud entra a la cola del planificador de disco. Cuando
+ * el disco termina avisa por solicitudCompletada, que tambien usa el buzon.
  */
-public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupciones {
+public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupciones, OyenteDisco {
 
     private static final class Aviso {
         final PCB pcb;
@@ -68,6 +77,10 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
     private MotivoBloqueo bloqueoPendiente = MotivoBloqueo.NINGUNO;
     private int ciclosBloqueoPendiente;
     private long ciclo;
+
+    private volatile PlanificadorDisco planificadorDisco;
+    private volatile SistemaArchivos archivos;
+    private SolicitudES solicitudPendiente;
 
     public SistemaOperativo(int computador, MemoriaPrincipal ram, CPU cpu, PoliticaPlanificacion politica,
             ParametrosSimulacion parametros, RegistroEventos log) {
@@ -109,6 +122,32 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
             return politica.getTipo();
         } finally {
             candado.abrir();
+        }
+    }
+
+    /** Conecta este sistema operativo con el disco: su planificador y el sistema de archivos. */
+    public void conectarDisco(PlanificadorDisco planificador, SistemaArchivos archivos) {
+        this.planificadorDisco = planificador;
+        this.archivos = archivos;
+        planificador.setOyente(this);
+    }
+
+    /**
+     * El disco termino una solicitud. Se aplica el cambio en el sistema de
+     * archivos y se pide despertar al proceso, que pasa a Listo en el
+     * siguiente ciclo. Lo llama el hilo del disco, por eso no toca las colas.
+     */
+    @Override
+    public void solicitudCompletada(SolicitudES solicitud, long ciclo) {
+        SistemaArchivos fs = archivos;
+        if (fs != null && solicitud.getOperacion().esDeArchivo()) {
+            String efecto = fs.aplicar(solicitud);
+            if (!efecto.isEmpty()) {
+                log.registrar(efecto);
+            }
+        }
+        if (solicitud.getPcb() != null) {
+            pedirDespertar(solicitud.getPcb(), "fin de E/S de disco");
         }
     }
 
@@ -188,6 +227,7 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         try {
             this.ciclo = ciclo;
             bloqueoPendiente = MotivoBloqueo.NINGUNO;
+            solicitudPendiente = null;
             actualizarQuantum();
             atenderBuzon();
             revisarDeadlines(ciclo);
@@ -345,6 +385,39 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
                 }
             }
             case PRODUCTOR, CONSUMIDOR -> productorConsumidor(p);
+            case ES_ARCHIVO -> entradaSalidaArchivo(p);
+        }
+    }
+
+    /**
+     * Proceso de E/S de archivo. Su primera instruccion es la llamada al
+     * sistema de archivos (modo SO): se arma la solicitud y el proceso queda
+     * bloqueado hasta que el disco la atienda. Lo que le quede despues son
+     * instrucciones normales de usuario.
+     */
+    private void entradaSalidaArchivo(PCB p) {
+        if (p.solicitudHecha()) {
+            usuario(p);
+            return;
+        }
+        p.marcarSolicitudHecha();
+        String que = p.getOperacionES().getClave() + " " + p.getRutaArchivo();
+        sistema(p, que);
+        SistemaArchivos fs = archivos;
+        if (fs == null || planificadorDisco == null) {
+            log.registrar("Computador " + computador + ": " + p.getEtiqueta() + " pide " + que
+                    + " pero no hay disco conectado");
+            return;
+        }
+        try {
+            solicitudPendiente = fs.prepararSolicitud(p.getOperacionES(), p.getRutaArchivo(),
+                    p.getTamanoArchivo(), p.getNuevoNombre(), p.getUsuario(), p.getModoUsuario(),
+                    p.getId(), p.getEtiqueta(), p, ciclo);
+            bloqueoPendiente = MotivoBloqueo.ENTRADA_SALIDA;
+        } catch (OperacionRechazada e) {
+            // no se bloquea: la operacion no llega al disco y el proceso sigue hasta terminar
+            log.registrar("Computador " + computador + ": se rechaza " + que + " de " + p.getEtiqueta()
+                    + ". " + e.getMessage());
         }
     }
 
@@ -474,6 +547,15 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         p.bloquear(motivo, ciclo);
         p.setBloqueadoDesde(ciclo);
         bloqueados.encolar(p);
+        if (motivo == MotivoBloqueo.ENTRADA_SALIDA && solicitudPendiente != null) {
+            // E/S de archivo: no hay temporizador, el proceso espera a que el disco lo atienda
+            SolicitudES s = solicitudPendiente;
+            solicitudPendiente = null;
+            log.registrar("Computador " + computador + ": " + p.getEtiqueta() + " se bloquea por E/S de disco ("
+                    + s.getOperacion().getEtiqueta() + " " + s.getRuta() + ")");
+            planificadorDisco.encolar(s);
+            return;
+        }
         if (motivo == MotivoBloqueo.ENTRADA_SALIDA || motivo == MotivoBloqueo.ACCESO_REMOTO) {
             es.solicitar(p, ciclos, motivo == MotivoBloqueo.ENTRADA_SALIDA ? "fin de E/S" : "fin de latencia de red");
         }
@@ -492,6 +574,9 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         listos.eliminar(p);
         bloqueados.eliminar(p);
         es.cancelar(p);
+        if (planificadorDisco != null) {
+            planificadorDisco.cancelarDe(p.getId());
+        }
         if (p.getBuffer() != null) {
             liberarBuffer(p);
         }
