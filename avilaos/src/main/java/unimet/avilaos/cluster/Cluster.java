@@ -4,12 +4,17 @@ import unimet.avilaos.estructuras.ListaEnlazada;
 import unimet.avilaos.estructuras.Recorrido;
 import unimet.avilaos.hardware.Computador;
 import unimet.avilaos.hardware.RelojGlobal;
+import unimet.avilaos.hardware.disco.Disco;
 import unimet.avilaos.metricas.Estadisticas;
 import unimet.avilaos.sincronizacion.BufferAcotado;
 import unimet.avilaos.sincronizacion.EnrutadorDespertar;
 import unimet.avilaos.sincronizacion.Mutex;
 import unimet.avilaos.so.ParametrosSimulacion;
 import unimet.avilaos.so.RegistroEventos;
+import unimet.avilaos.so.archivos.ModoUsuario;
+import unimet.avilaos.so.archivos.SistemaArchivos;
+import unimet.avilaos.so.disco.PlanificadorDisco;
+import unimet.avilaos.so.disco.TipoPoliticaDisco;
 import unimet.avilaos.so.planificacion.FabricaPoliticas;
 import unimet.avilaos.so.planificacion.TipoPolitica;
 import unimet.avilaos.so.proceso.GeneradorId;
@@ -33,9 +38,12 @@ public class Cluster implements EnrutadorDespertar {
     private final RegistroEventos log = new RegistroEventos();
     private final RelojGlobal reloj;
 
+    private volatile SistemaArchivos archivos;
+    private volatile PlanificadorDisco planificadorDisco;
+
     public Cluster(int[] rams, TipoPolitica[] politicas, int duracionCiclo, int quantum, int latencia) {
-        if (rams.length < 2) {
-            throw new IllegalArgumentException("Hacen falta al menos 2 computadores");
+        if (rams.length < 1) {
+            throw new IllegalArgumentException("Hace falta al menos 1 computador");
         }
         parametros = new ParametrosSimulacion(quantum, latencia);
         computadores = new Computador[rams.length];
@@ -50,8 +58,66 @@ public class Cluster implements EnrutadorDespertar {
         Thread hilo = new Thread(reloj, "RelojGlobal");
         hilo.setDaemon(true);
         hilo.start();
-        log.registrar("AvilaOS arranca con " + computadores.length + " computadores");
+        log.registrar("AvilaOS arranca con " + computadores.length
+                + (computadores.length == 1 ? " computador" : " computadores"));
     }
+
+    // ------------------------------------------------------------- disco
+
+    /**
+     * Conecta el disco local al Computador 1 con su planificador y el
+     * sistema de archivos. Hay un solo disco en todo el sistema.
+     */
+    public void instalarDisco(SistemaArchivos archivos, TipoPoliticaDisco politica) {
+        if (this.archivos != null) {
+            throw new IllegalArgumentException("Ya hay un disco instalado");
+        }
+        PlanificadorDisco planificador = new PlanificadorDisco(politica, log);
+        Disco disco = archivos.getDisco();
+        disco.setControlador(planificador);
+        computadores[0].getOs().conectarDisco(planificador, archivos);
+        computadores[0].instalarDisco(disco);
+        this.planificadorDisco = planificador;
+        this.archivos = archivos;
+        log.registrar("Disco de " + disco.getTotalBloques() + " bloques y " + disco.getTamanoSwap()
+                + " de intercambio conectado al Computador 1 (" + politica.getEtiqueta() + ")");
+    }
+
+    /**
+     * Crea un proceso de E/S sobre un archivo o directorio. La interfaz solo
+     * llama a este metodo: la operacion la hace el proceso cuando le toque.
+     * En modo usuario se revisa el permiso antes de crear el proceso y, si
+     * no se puede, lanza OperacionRechazada con el motivo.
+     */
+    public PCB crearProcesoES(EspecificacionES e) {
+        SistemaArchivos fs = archivos;
+        if (fs == null) {
+            throw new IllegalArgumentException("Primero hay que cargar el sistema de archivos");
+        }
+        if (e.modo() == ModoUsuario.USUARIO) {
+            fs.validarPermiso(e.operacion(), e.ruta(), e.usuario(), e.modo());
+        }
+        Computador destino = computadores[0];
+        PCB pcb = new PCB(ids.siguiente(), e.nombre(), destino.getId(), TipoProceso.ES_ARCHIVO,
+                e.prioridad(), e.memoria(), e.instrucciones(), e.deadline(), reloj.getCiclo());
+        pcb.configurarArchivo(e.operacion(), e.ruta(), e.tamanoBloques(), e.nuevoNombre(),
+                e.usuario(), e.modo());
+        destino.getOs().admitirProceso(pcb);
+        return pcb;
+    }
+
+    /** Cambia la politica de disco con el sistema corriendo. */
+    public void cambiarPoliticaDisco(TipoPoliticaDisco politica) {
+        PlanificadorDisco p = planificadorDisco;
+        if (p != null && p.getTipoPolitica() != politica) {
+            p.cambiarPolitica(politica);
+        }
+    }
+
+    /** null mientras no se haya cargado el disco. */
+    public SistemaArchivos getSistemaArchivos() { return archivos; }
+    public PlanificadorDisco getPlanificadorDisco() { return planificadorDisco; }
+    public Disco getDisco() { return archivos == null ? null : archivos.getDisco(); }
 
     // ------------------------------------------------------------- procesos
 
@@ -63,6 +129,9 @@ public class Cluster implements EnrutadorDespertar {
             if (buffer == null) {
                 throw new IllegalArgumentException("No existe el buffer " + e.buffer());
             }
+        }
+        if (e.tipo() == TipoProceso.ES_ARCHIVO) {
+            throw new IllegalArgumentException("Los procesos de E/S de archivo se crean con crearProcesoES");
         }
         if (e.computador() < 0 || e.computador() > computadores.length) {
             throw new IllegalArgumentException("Computador invalido: " + e.computador());
