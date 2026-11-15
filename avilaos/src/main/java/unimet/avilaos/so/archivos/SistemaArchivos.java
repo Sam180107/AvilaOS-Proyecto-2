@@ -18,6 +18,7 @@ public class SistemaArchivos {
     public static final String ADMIN = "admin";
 
     private final Mutex mutex = new Mutex();
+    private volatile long version = 0;
     private final Disco disco;
     private final NodoArchivo raiz = new NodoArchivo("", TipoNodo.DIRECTORIO, ADMIN, Permiso.PUBLICO);
 
@@ -29,9 +30,40 @@ public class SistemaArchivos {
         return disco;
     }
 
-    /** Raiz del arbol, para armar el JTree. */
+    /** Raiz del arbol. */
     public NodoArchivo getRaiz() {
         return raiz;
+    }
+
+    /** Sube cada vez que cambia la estructura del arbol; la interfaz lo usa para saber cuando repintar. */
+    public long getVersion() {
+        return version;
+    }
+
+    /**
+     * Copia del arbol en preorden (la raiz primero, cada directorio antes de
+     * sus hijos), tomada con el mutex. Es lo que la interfaz usa para el JTree
+     * y la tabla de asignacion.
+     */
+    public ListaEnlazada<EntradaArchivo> instantanea() {
+        mutex.cerrar();
+        try {
+            ListaEnlazada<EntradaArchivo> out = new ListaEnlazada<>();
+            copiarEntrada(raiz, 0, out);
+            return out;
+        } finally {
+            mutex.abrir();
+        }
+    }
+
+    private void copiarEntrada(NodoArchivo n, int nivel, ListaEnlazada<EntradaArchivo> out) {
+        out.agregarAlFinal(new EntradaArchivo(n.getRuta(), n.getPadre() == null ? "/" : n.getNombre(),
+                n.getTipo(), n.getDueno(), n.getPermiso(), n.getTamanoBloques(), n.getPrimerBloque(),
+                n.getProcesoCreador(), nivel));
+        Recorrido<NodoArchivo> r = n.hijos();
+        while (r.haySiguiente()) {
+            copiarEntrada(r.siguiente(), nivel + 1, out);
+        }
     }
 
     // ---------- operaciones basicas ----------
@@ -51,6 +83,7 @@ public class SistemaArchivos {
             NodoArchivo padre = padreParaCrear(ruta);
             NodoArchivo dir = new NodoArchivo(nombreDe(ruta), TipoNodo.DIRECTORIO, dueno, permiso);
             padre.agregarHijo(dir);
+            version++;
             return dir;
         } finally {
             mutex.abrir();
@@ -116,6 +149,7 @@ public class SistemaArchivos {
             }
             n.setNombre(nuevoNombre);
             actualizarOcupantes(n);
+            version++;
         } finally {
             mutex.abrir();
         }
@@ -134,6 +168,7 @@ public class SistemaArchivos {
             }
             int liberados = liberarBloques(n);
             n.getPadre().quitarHijo(n);
+            version++;
             return liberados;
         } finally {
             mutex.abrir();
@@ -232,6 +267,7 @@ public class SistemaArchivos {
                     if (tamanoBloques <= 0) {
                         padre.agregarHijo(new NodoArchivo(nombreDe(ruta), TipoNodo.DIRECTORIO,
                                 usuario, Permiso.PUBLICO));
+                        version++;
                         bloques = new int[0];
                     } else {
                         int primero;
@@ -368,6 +404,7 @@ public class SistemaArchivos {
         archivo.setBloques(primero, bloques);
         archivo.setProcesoCreador(procesoCreador == null ? "-" : procesoCreador);
         padre.agregarHijo(archivo);
+        version++;
         return archivo;
     }
 
