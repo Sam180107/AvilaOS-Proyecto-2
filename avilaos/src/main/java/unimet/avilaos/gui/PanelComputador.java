@@ -80,6 +80,11 @@ public class PanelComputador extends JPanel {
         setPreferredSize(new Dimension(620, 380));
     }
 
+    /** Solo el administrador puede cambiar la politica de planificacion de CPU. */
+    public void setPoliticaEditable(boolean puedeCambiar) {
+        politica.setEnabled(puedeCambiar);
+    }
+
     public void refrescar() {
         FotoSistema f = computador.getOs().foto();
         if (politica.getSelectedItem() != f.politica) {
