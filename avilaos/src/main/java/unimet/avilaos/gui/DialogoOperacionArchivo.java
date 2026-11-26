@@ -15,7 +15,10 @@ import unimet.avilaos.cluster.Cluster;
 import unimet.avilaos.cluster.EspecificacionES;
 import unimet.avilaos.hardware.disco.Disco;
 import unimet.avilaos.hardware.disco.TipoOperacionES;
+import unimet.avilaos.so.archivos.ModoUsuario;
+import unimet.avilaos.so.archivos.NodoArchivo;
 import unimet.avilaos.so.archivos.OperacionRechazada;
+import unimet.avilaos.so.archivos.Permiso;
 import unimet.avilaos.so.archivos.SistemaArchivos;
 
 /**
@@ -31,6 +34,7 @@ public class DialogoOperacionArchivo extends JDialog {
         CREAR_DIRECTORIO("Crear directorio", TipoOperacionES.CREAR),
         LEER("Leer", TipoOperacionES.LEER),
         RENOMBRAR("Actualizar (renombrar)", TipoOperacionES.ACTUALIZAR),
+        CAMBIAR_PERMISO("Actualizar (cambiar permiso)", TipoOperacionES.ACTUALIZAR),
         ELIMINAR("Eliminar", TipoOperacionES.ELIMINAR);
 
         private final String etiqueta;
@@ -61,6 +65,8 @@ public class DialogoOperacionArchivo extends JDialog {
     private final JTextField ruta = new JTextField();
     private final JSpinner tamano;
     private final JTextField nuevoNombre = new JTextField();
+    private final JComboBox<Permiso> permiso = new JComboBox<>(Permiso.values());
+    private final JTextField dueno = new JTextField();
     private final JTextField nombre = new JTextField();
     private final JSpinner memoria;
     private final JSpinner instrucciones = DialogoProceso.numero(2, 1, 1_000_000);
@@ -80,6 +86,13 @@ public class DialogoOperacionArchivo extends JDialog {
         nombre.setText("ES_" + contadorProcesos);
         ruta.setText(rutaSugerida == null ? "/" : rutaSugerida);
         accion.setSelectedItem(inicial);
+        dueno.setText(contexto.usuario());
+        if (inicial == Accion.CAMBIAR_PERMISO && rutaSugerida != null) {
+            NodoArchivo actual = cluster.getSistemaArchivos().buscar(rutaSugerida);
+            if (actual != null) {
+                permiso.setSelectedItem(actual.getPermiso() == Permiso.PUBLICO ? Permiso.PRIVADO : Permiso.PUBLICO);
+            }
+        }
         accion.addActionListener(e -> habilitar());
 
         JPanel f = new JPanel(new GridLayout(0, 2, 6, 4));
@@ -87,6 +100,8 @@ public class DialogoOperacionArchivo extends JDialog {
         f.add(new JLabel("Ruta (ej. /usuarios/notas.txt):")); f.add(ruta);
         f.add(new JLabel("Tamano en bloques (crear archivo):")); f.add(tamano);
         f.add(new JLabel("Nuevo nombre (renombrar):")); f.add(nuevoNombre);
+        f.add(new JLabel("Permiso (crear o cambiar permiso):")); f.add(permiso);
+        f.add(new JLabel("Dueno (crear, solo administrador):")); f.add(dueno);
         f.add(new JLabel("A nombre de:")); f.add(new JLabel(contexto.usuario() + " (" + contexto.modo().getEtiqueta() + ")"));
         f.add(new JLabel("Nombre del proceso de E/S:")); f.add(nombre);
         f.add(new JLabel("Memoria del proceso (RAM " + ramTotal + "):")); f.add(memoria);
@@ -112,8 +127,16 @@ public class DialogoOperacionArchivo extends JDialog {
 
     private void habilitar() {
         Accion a = (Accion) accion.getSelectedItem();
+        boolean crea = a == Accion.CREAR_ARCHIVO || a == Accion.CREAR_DIRECTORIO;
         tamano.setEnabled(a == Accion.CREAR_ARCHIVO);
         nuevoNombre.setEnabled(a == Accion.RENOMBRAR);
+        permiso.setEnabled(crea || a == Accion.CAMBIAR_PERMISO);
+        dueno.setEnabled(crea && contexto.modo() == ModoUsuario.ADMINISTRADOR);
+        if (a == Accion.CREAR_ARCHIVO && permiso.isEnabled()) {
+            permiso.setSelectedItem(Permiso.PRIVADO);
+        } else if (a == Accion.CREAR_DIRECTORIO) {
+            permiso.setSelectedItem(Permiso.PUBLICO);
+        }
     }
 
     private void crear() {
@@ -146,6 +169,22 @@ public class DialogoOperacionArchivo extends JDialog {
                 return;
             }
         }
+        Permiso p = null;
+        if (crea || a == Accion.CAMBIAR_PERMISO) {
+            p = (Permiso) permiso.getSelectedItem();
+        }
+        String duenoNuevo = null;
+        if (crea && contexto.modo() == ModoUsuario.ADMINISTRADOR) {
+            duenoNuevo = dueno.getText().trim();
+            if (!duenoNuevo.matches("[A-Za-z0-9_]{1,20}")) {
+                error("El dueno debe tener entre 1 y 20 letras, numeros o _ (por ejemplo user1).");
+                return;
+            }
+        }
+        if (a == Accion.CAMBIAR_PERMISO && "/".equals(r)) {
+            error("La raiz no tiene permiso que cambiar.");
+            return;
+        }
         int bloques = a == Accion.CREAR_ARCHIVO ? DialogoProceso.valor(tamano) : 0;
         Disco disco = cluster.getDisco();
         if (bloques > disco.bloquesLibres()) {
@@ -157,7 +196,7 @@ public class DialogoOperacionArchivo extends JDialog {
             cluster.crearProcesoES(new EspecificacionES(n, DialogoProceso.valor(memoria),
                     DialogoProceso.valor(prioridad), DialogoProceso.valor(deadline),
                     DialogoProceso.valor(instrucciones), a.getOperacion(), r, bloques, nuevo,
-                    contexto.usuario(), contexto.modo()));
+                    contexto.usuario(), contexto.modo(), p, duenoNuevo));
             contadorProcesos++;
             dispose();
         } catch (OperacionRechazada ex) {

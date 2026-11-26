@@ -19,8 +19,6 @@ import unimet.avilaos.estructuras.Recorrido;
 import unimet.avilaos.gui.ArbolArchivosModelo.NodoVista;
 import unimet.avilaos.gui.DialogoOperacionArchivo.Accion;
 import unimet.avilaos.so.archivos.EntradaArchivo;
-import unimet.avilaos.so.archivos.OperacionRechazada;
-import unimet.avilaos.so.archivos.Permiso;
 import unimet.avilaos.so.archivos.SistemaArchivos;
 
 /**
@@ -101,6 +99,7 @@ public class PanelArchivos extends JPanel {
         return b;
     }
 
+    /** El cambio de permiso tambien es un proceso de E/S (Actualizar); la interfaz no toca el arbol. */
     private void alternarPermiso() {
         EntradaArchivo e = seleccion();
         if (e == null || "/".equals(e.ruta())) {
@@ -108,17 +107,7 @@ public class PanelArchivos extends JPanel {
                     "Permisos", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
-        Permiso nuevo = e.permiso() == Permiso.PUBLICO ? Permiso.PRIVADO : Permiso.PUBLICO;
-        try {
-            cluster.getSistemaArchivos().cambiarPermiso(e.ruta(), nuevo, contexto.usuario(), contexto.modo());
-            cluster.getLog().registrar("Permiso de " + e.ruta() + " cambiado a "
-                    + nuevo.getEtiqueta() + " por " + contexto.usuario());
-            refrescar();
-        } catch (OperacionRechazada ex) {
-            cluster.getLog().registrar("Cambio de permiso rechazado (" + contexto.usuario() + "): " + ex.getMessage());
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Operacion no permitida",
-                    JOptionPane.WARNING_MESSAGE);
-        }
+        abrir(Accion.CAMBIAR_PERMISO);
     }
 
     public void refrescar() {
