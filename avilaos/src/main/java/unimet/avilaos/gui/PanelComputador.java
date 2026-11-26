@@ -19,7 +19,7 @@ import unimet.avilaos.hardware.ModoEjecucion;
 import unimet.avilaos.so.FotoSistema;
 import unimet.avilaos.so.planificacion.TipoPolitica;
 
-/** Vista de un computador: CPU, modo, memoria, politica y colas. Solo observa. */
+/** Vista de un computador: CPU, modo, memoria, politica y las 7 etapas del proceso. */
 public class PanelComputador extends JPanel {
 
     private final Computador computador;
@@ -32,6 +32,8 @@ public class PanelComputador extends JPanel {
     private final ModeloTablaSoloLectura nuevos = new ModeloTablaSoloLectura(FotoSistema.COLUMNAS);
     private final ModeloTablaSoloLectura listos = new ModeloTablaSoloLectura(FotoSistema.COLUMNAS);
     private final ModeloTablaSoloLectura bloqueados = new ModeloTablaSoloLectura(FotoSistema.COLUMNAS);
+    private final ModeloTablaSoloLectura listosSuspendidos = new ModeloTablaSoloLectura(FotoSistema.COLUMNAS);
+    private final ModeloTablaSoloLectura bloqueadosSuspendidos = new ModeloTablaSoloLectura(FotoSistema.COLUMNAS);
     private final ModeloTablaSoloLectura terminados = new ModeloTablaSoloLectura(FotoSistema.COLUMNAS);
 
     public PanelComputador(Computador computador) {
@@ -64,7 +66,7 @@ public class PanelComputador extends JPanel {
 
         JScrollPane tablaCpu = new JScrollPane(new JTable(enCpu));
         tablaCpu.setPreferredSize(new Dimension(100, 70));
-        tablaCpu.setBorder(BorderFactory.createTitledBorder("PCB en CPU"));
+        tablaCpu.setBorder(BorderFactory.createTitledBorder("PCB en CPU (Ejecucion)"));
 
         JPanel norte = new JPanel(new BorderLayout());
         norte.add(arriba, BorderLayout.NORTH);
@@ -74,13 +76,14 @@ public class PanelComputador extends JPanel {
         colas.addTab("Nuevos", new JScrollPane(new JTable(nuevos)));
         colas.addTab("Listos", new JScrollPane(new JTable(listos)));
         colas.addTab("Bloqueados", new JScrollPane(new JTable(bloqueados)));
+        colas.addTab("Listos/Susp.", new JScrollPane(new JTable(listosSuspendidos)));
+        colas.addTab("Bloq./Susp.", new JScrollPane(new JTable(bloqueadosSuspendidos)));
         colas.addTab("Terminados", new JScrollPane(new JTable(terminados)));
         colas.setSelectedIndex(1);
         add(colas, BorderLayout.CENTER);
         setPreferredSize(new Dimension(620, 380));
     }
 
-    /** Solo el administrador puede cambiar la politica de planificacion de CPU. */
     public void setPoliticaEditable(boolean puedeCambiar) {
         politica.setEnabled(puedeCambiar);
     }
@@ -94,19 +97,23 @@ public class PanelComputador extends JPanel {
         modo.setBackground(f.modo == ModoEjecucion.USUARIO ? new Color(0xC8E6C9)
                 : f.modo == ModoEjecucion.SISTEMA_OPERATIVO ? new Color(0xFFE0B2) : new Color(0xE0E0E0));
         cpu.setText(f.enCpu == null ? "CPU: libre"
-                : "CPU: " + f.enCpu[0] + "   PC=" + f.pcEnCpu + "   Prioridad=" + f.enCpu[5]
-                + "   Deadline=" + f.enCpu[7] + "   Instruccion: " + f.instruccion);
+                : "CPU: " + f.enCpu[0] + " PC=" + f.pcEnCpu + " Prioridad=" + f.enCpu[5]
+                + " Deadline=" + f.enCpu[7] + " Instruccion: " + f.instruccion);
         ram.setMaximum(Math.max(1, f.memTotal));
         ram.setValue(f.memUsada);
-        ram.setString("RAM usada " + f.memUsada + " / " + f.memTotal + "  (libre " + (f.memTotal - f.memUsada) + ")");
+        ram.setString("RAM usada " + f.memUsada + " / " + f.memTotal + " (libre " + (f.memTotal - f.memUsada) + ")");
         enCpu.setFilas(f.enCpu == null ? new Object[0][] : new Object[][] {f.enCpu});
         nuevos.setFilas(f.nuevos);
         listos.setFilas(f.listos);
         bloqueados.setFilas(f.bloqueados);
+        listosSuspendidos.setFilas(f.listosSuspendidos);
+        bloqueadosSuspendidos.setFilas(f.bloqueadosSuspendidos);
         terminados.setFilas(f.terminados);
         colas.setTitleAt(0, "Nuevos (" + f.nuevos.length + ")");
         colas.setTitleAt(1, "Listos (" + f.listos.length + ")");
         colas.setTitleAt(2, "Bloqueados (" + f.bloqueados.length + ")");
-        colas.setTitleAt(3, "Terminados (" + f.terminados.length + ")");
+        colas.setTitleAt(3, "Listos/Susp. (" + f.listosSuspendidos.length + ")");
+        colas.setTitleAt(4, "Bloq./Susp. (" + f.bloqueadosSuspendidos.length + ")");
+        colas.setTitleAt(5, "Terminados (" + f.terminados.length + ")");
     }
 }
