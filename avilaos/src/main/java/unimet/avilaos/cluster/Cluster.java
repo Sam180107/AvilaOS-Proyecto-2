@@ -62,17 +62,13 @@ public class Cluster implements EnrutadorDespertar {
                 + (computadores.length == 1 ? " computador" : " computadores"));
     }
 
-    /**
-     * Arma el sistema del Proyecto 2 con lo que traen los dos JSON: un solo
-     * computador, el disco ya cargado y los procesos de E/S.
-     * Lanza IllegalArgumentException si algo de la configuracion no sirve.
-     */
     public static Cluster crear(ConfiguracionProcesos cfg, SistemaArchivos archivos) {
         Cluster c = new Cluster(new int[]{cfg.ram}, new TipoPolitica[]{cfg.politica},
                 cfg.duracionCiclo, cfg.quantum, 0);
         try {
             archivos.getDisco().redimensionarSwap(cfg.tamanoSwap);
             archivos.getDisco().setPosicionesPorCiclo(cfg.posicionesPorCiclo);
+            archivos.configurarCache(cfg.tamanoCache);
         } catch (IllegalStateException e) {
             throw new IllegalArgumentException(e.getMessage());
         }
@@ -84,12 +80,6 @@ public class Cluster implements EnrutadorDespertar {
         return c;
     }
 
-    // ------------------------------------------------------------- disco
-
-    /**
-     * Conecta el disco local al Computador 1 con su planificador y el
-     * sistema de archivos. Hay un solo disco en todo el sistema.
-     */
     public void instalarDisco(SistemaArchivos archivos, TipoPoliticaDisco politica) {
         if (this.archivos != null) {
             throw new IllegalArgumentException("Ya hay un disco instalado");
@@ -101,16 +91,11 @@ public class Cluster implements EnrutadorDespertar {
         computadores[0].instalarDisco(disco);
         this.planificadorDisco = planificador;
         this.archivos = archivos;
-        log.registrar("Disco de " + disco.getTotalBloques() + " bloques y " + disco.getTamanoSwap()
-                + " de intercambio conectado al Computador 1 (" + politica.getEtiqueta() + ")");
+        log.registrar("Disco de " + disco.getTotalBloques() + " bloques, " + disco.getTamanoSwap()
+                + " de intercambio y cache LRU (" + archivos.getCache().getCapacidad()
+                + " bloques) conectado al Computador 1 (" + politica.getEtiqueta() + ")");
     }
 
-    /**
-     * Crea un proceso de E/S sobre un archivo o directorio. La interfaz solo
-     * llama a este metodo: la operacion la hace el proceso cuando le toque.
-     * En modo usuario se revisa el permiso antes de crear el proceso y, si
-     * no se puede, lanza OperacionRechazada con el motivo.
-     */
     public PCB crearProcesoES(EspecificacionES e) {
         SistemaArchivos fs = archivos;
         if (fs == null) {
@@ -128,7 +113,6 @@ public class Cluster implements EnrutadorDespertar {
         return pcb;
     }
 
-    /** Cambia la politica de disco con el sistema corriendo. */
     public void cambiarPoliticaDisco(TipoPoliticaDisco politica) {
         PlanificadorDisco p = planificadorDisco;
         if (p != null && p.getTipoPolitica() != politica) {
@@ -136,14 +120,10 @@ public class Cluster implements EnrutadorDespertar {
         }
     }
 
-    /** null mientras no se haya cargado el disco. */
     public SistemaArchivos getSistemaArchivos() { return archivos; }
     public PlanificadorDisco getPlanificadorDisco() { return planificadorDisco; }
     public Disco getDisco() { return archivos == null ? null : archivos.getDisco(); }
 
-    // ------------------------------------------------------------- procesos
-
-    /** Crea un proceso. Lanza IllegalArgumentException si un dato no sirve. */
     public PCB crearProceso(EspecificacionProceso e) {
         BufferAcotado buffer = null;
         if (e.tipo().usaBuffer()) {
@@ -180,10 +160,6 @@ public class Cluster implements EnrutadorDespertar {
         return pcb;
     }
 
-    /**
-     * Balanceo simple: el computador con menos procesos vivos; si empatan,
-     * el de mas RAM libre.
-     */
     private Computador menosCargado() {
         Computador mejor = computadores[0];
         for (Computador c : computadores) {
@@ -196,9 +172,6 @@ public class Cluster implements EnrutadorDespertar {
         return mejor;
     }
 
-    // ------------------------------------------------------------- buffers
-
-    /** Crea un buffer. Lanza IllegalArgumentException si no se puede. */
     public BufferAcotado crearBuffer(EspecificacionBuffer e) {
         if (e.anfitrion() < 1 || e.anfitrion() > computadores.length) {
             throw new IllegalArgumentException("Anfitrion invalido: " + e.anfitrion());
@@ -239,18 +212,9 @@ public class Cluster implements EnrutadorDespertar {
         }
     }
 
-    /** Copia de la lista de buffers para recorrerla sin candado. */
-    public ListaEnlazada<BufferAcotado> getBuffers() {
-        return copiar(buffers);
-    }
-
-    public ListaEnlazada<EspecificacionProceso> getProcesosCreados() {
-        return copiar(procesosCreados);
-    }
-
-    public ListaEnlazada<EspecificacionBuffer> getBuffersCreados() {
-        return copiar(buffersCreados);
-    }
+    public ListaEnlazada<BufferAcotado> getBuffers() { return copiar(buffers); }
+    public ListaEnlazada<EspecificacionProceso> getProcesosCreados() { return copiar(procesosCreados); }
+    public ListaEnlazada<EspecificacionBuffer> getBuffersCreados() { return copiar(buffersCreados); }
 
     private <T> ListaEnlazada<T> copiar(ListaEnlazada<T> origen) {
         candado.cerrar();
@@ -266,13 +230,10 @@ public class Cluster implements EnrutadorDespertar {
         }
     }
 
-    /** Un signal desperto a un proceso: va al sistema operativo de su computador. */
     @Override
     public void despertar(PCB pcb, String motivo) {
         computadores[pcb.getIdComputador() - 1].getOs().pedirDespertar(pcb, motivo);
     }
-
-    // ------------------------------------------------------------- metricas globales
 
     public double throughputGlobal() {
         long c = reloj.getCiclo();
@@ -314,8 +275,6 @@ public class Cluster implements EnrutadorDespertar {
         }
         return t == 0 ? 0 : (double) ok / t;
     }
-
-    // ------------------------------------------------------------- getters
 
     public Computador[] getComputadores() { return computadores; }
     public RelojGlobal getReloj() { return reloj; }

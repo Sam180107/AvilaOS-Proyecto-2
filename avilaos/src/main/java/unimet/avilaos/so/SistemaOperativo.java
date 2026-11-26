@@ -10,7 +10,9 @@ import unimet.avilaos.hardware.DispositivoES;
 import unimet.avilaos.hardware.ManejadorInterrupciones;
 import unimet.avilaos.hardware.MemoriaPrincipal;
 import unimet.avilaos.hardware.ModoEjecucion;
+import unimet.avilaos.hardware.disco.Disco;
 import unimet.avilaos.hardware.disco.SolicitudES;
+import unimet.avilaos.hardware.disco.TipoOperacionES;
 import unimet.avilaos.metricas.Estadisticas;
 import unimet.avilaos.sincronizacion.BufferAcotado;
 import unimet.avilaos.sincronizacion.Mutex;
@@ -30,18 +32,8 @@ import unimet.avilaos.so.proceso.PCB;
 import unimet.avilaos.so.proceso.TipoProceso;
 
 /**
- * Sistema operativo de un computador: admision por memoria (largo plazo),
- * planificacion (corto plazo), bloqueos, deadlines y productor-consumidor.
- *
- * Hilos: "candado" protege las colas, la CPU y la RAM. Los despertares que
- * vienen de otro computador (un signal remoto) o del controlador de E/S entran
- * a un buzon con su propio candado y se atienden al inicio del siguiente
- * ciclo, asi nunca se toman los candados de dos computadores a la vez.
- * Orden de candados: sistema operativo -> buffer -> buzon.
- *
- * Disco: un proceso de E/S de archivo pide su operacion en modo SO, queda
- * bloqueado y su solicitud entra a la cola del planificador de disco. Cuando
- * el disco termina avisa por solicitudCompletada, que tambien usa el buzon.
+ * Sistema operativo de un computador: admision (largo plazo), intercambio Swap
+ * (mediano plazo con 7 estados), planificacion (corto plazo) y E/S de disco.
  */
 public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupciones, OyenteDisco {
 
@@ -58,6 +50,8 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
     private Cola<PCB> nuevos = new Cola<>();
     private ListaOrdenada<PCB> listos;
     private final Cola<PCB> bloqueados = new Cola<>();
+    private ListaOrdenada<PCB> listosSuspendidos;
+    private final Cola<PCB> bloqueadosSuspendidos = new Cola<>();
     private final Cola<PCB> terminados = new Cola<>();
     private final MemoriaPrincipal ram;
     private final CPU cpu;
@@ -83,27 +77,28 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
     private SolicitudES solicitudPendiente;
 
     public SistemaOperativo(int computador, MemoriaPrincipal ram, CPU cpu, PoliticaPlanificacion politica,
-            ParametrosSimulacion parametros, RegistroEventos log) {
+                            ParametrosSimulacion parametros, RegistroEventos log) {
         this.computador = computador;
         this.ram = ram;
         this.cpu = cpu;
         this.politica = politica;
         this.listos = new ListaOrdenada<>(politica.getComparador());
+        this.listosSuspendidos = new ListaOrdenada<>(politica.getComparador());
         this.parametros = parametros;
         this.log = log;
         this.es = new DispositivoES(this);
     }
 
     // =================================================================
-    //  Llamadas desde la GUI o el cluster (otros hilos)
+    // Llamadas desde la GUI o el cluster (otros hilos)
     // =================================================================
 
-    /** Cambia la politica en caliente y reordena la cola de listos. */
     public void cambiarPolitica(PoliticaPlanificacion nuevaPolitica) {
         candado.cerrar();
         try {
             this.politica = nuevaPolitica;
             this.listos.cambiarComparador(nuevaPolitica.getComparador());
+            this.listosSuspendidos.cambiarComparador(nuevaPolitica.getComparador());
             log.registrar("Computador " + computador + " cambia su politica a " + nuevaPolitica.getNombre());
         } finally {
             candado.abrir();
@@ -125,23 +120,17 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         }
     }
 
-    /** Conecta este sistema operativo con el disco: su planificador y el sistema de archivos. */
     public void conectarDisco(PlanificadorDisco planificador, SistemaArchivos archivos) {
         this.planificadorDisco = planificador;
         this.archivos = archivos;
         planificador.setOyente(this);
     }
 
-    /**
-     * El disco termino una solicitud. Se aplica el cambio en el sistema de
-     * archivos y se pide despertar al proceso, que pasa a Listo en el
-     * siguiente ciclo. Lo llama el hilo del disco, por eso no toca las colas.
-     */
     @Override
     public void solicitudCompletada(SolicitudES solicitud, long ciclo) {
         SistemaArchivos fs = archivos;
         if (fs != null && solicitud.getOperacion().esDeArchivo()) {
-            String efecto = fs.aplicar(solicitud);
+            String efecto = fs.aplicar(solicitud, ciclo);
             if (!efecto.isEmpty()) {
                 log.registrar(efecto);
             }
@@ -151,20 +140,19 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         }
     }
 
-    /** Llega un proceso nuevo a la cola de nuevos. */
     public void admitirProceso(PCB pcb) {
         candado.cerrar();
         try {
             nuevos.encolar(pcb);
             log.registrar("Computador " + computador + ": llega " + pcb.getEtiqueta()
                     + " (" + pcb.getNombre() + ", " + pcb.getTipo().getEtiqueta() + ")");
+            planificarMedianoPlazo(ciclo);
             revisarMemoria(ciclo);
         } finally {
             candado.abrir();
         }
     }
 
-    /** Reserva la RAM de un buffer que vive en este computador. */
     public boolean reservarBuffer(BufferAcotado b) {
         candado.cerrar();
         try {
@@ -178,7 +166,6 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         }
     }
 
-    /** Despertar por un semSignal (puede venir de otro computador). */
     public void pedirDespertar(PCB pcb, String motivo) {
         candadoBuzon.cerrar();
         try {
@@ -188,17 +175,17 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         }
     }
 
-    /** Fin de E/S o de latencia de red. */
     @Override
     public void interrumpir(PCB pcb, String motivo) {
         pedirDespertar(pcb, motivo);
     }
 
-    /** Procesos vivos en este computador (para la asignacion automatica). */
     public int getCarga() {
         candado.cerrar();
         try {
-            return nuevos.tamano() + listos.tamano() + bloqueados.tamano() + (cpu.getActual() != null ? 1 : 0);
+            return nuevos.tamano() + listos.tamano() + bloqueados.tamano()
+                    + listosSuspendidos.tamano() + bloqueadosSuspendidos.tamano()
+                    + (cpu.getActual() != null ? 1 : 0);
         } finally {
             candado.abrir();
         }
@@ -214,13 +201,9 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
     }
 
     // =================================================================
-    //  Ciclo de reloj
+    // Ciclo de reloj
     // =================================================================
 
-    /**
-     * Lo que hace el sistema operativo al empezar cada ciclo: atiende avisos,
-     * revisa deadlines, admite nuevos si hay RAM y escoge quien va a la CPU.
-     */
     @Override
     public void alTick(long ciclo) {
         candado.cerrar();
@@ -231,6 +214,7 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
             actualizarQuantum();
             atenderBuzon();
             revisarDeadlines(ciclo);
+            planificarMedianoPlazo(ciclo);
             revisarMemoria(ciclo);
             planificar(ciclo);
         } finally {
@@ -238,7 +222,6 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         }
     }
 
-    /** Despues de que la CPU ejecuto el ciclo: aplica bloqueos o terminaciones. */
     public void despuesDeEjecutar() {
         candado.cerrar();
         try {
@@ -261,10 +244,6 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         }
     }
 
-    /**
-     * Pasa a Listos a los que despertaron por fin de E/S o por un semSignal.
-     * Los avisos de otros computadores llegan aqui y no directo, para no tomar dos candados a la vez.
-     */
     private void atenderBuzon() {
         Cola<Aviso> avisos;
         candadoBuzon.cerrar();
@@ -274,34 +253,49 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         } finally {
             candadoBuzon.abrir();
         }
-        boolean hubo = false;
+        boolean huboListos = false;
+        boolean huboSuspendidos = false;
         while (!avisos.estaVacia()) {
             Aviso a = avisos.desencolar();
             PCB p = a.pcb;
-            if (p.getEstado() != EstadoProceso.BLOQUEADO) {
-                continue; // por ejemplo, ya murio por deadline
+            if (p.getEstado() == EstadoProceso.BLOQUEADO) {
+                MotivoBloqueo m = p.getMotivoBloqueo();
+                if (m == MotivoBloqueo.SEM_VACIOS || m == MotivoBloqueo.SEM_LLENOS || m == MotivoBloqueo.SEM_MUTEX) {
+                    p.sumarCiclosEnSemaforos(ciclo - p.getBloqueadoDesde());
+                }
+                bloqueados.eliminar(p);
+                p.cambiarEstado(EstadoProceso.LISTO, ciclo);
+                listos.insertar(p);
+                huboListos = true;
+                log.registrar("Computador " + computador + ": " + p.getEtiqueta() + " se desbloquea (" + a.motivo + ")");
+            } else if (p.getEstado() == EstadoProceso.BLOQUEADO_SUSPENDIDO) {
+                MotivoBloqueo m = p.getMotivoBloqueo();
+                if (m == MotivoBloqueo.SEM_VACIOS || m == MotivoBloqueo.SEM_LLENOS || m == MotivoBloqueo.SEM_MUTEX) {
+                    p.sumarCiclosEnSemaforos(ciclo - p.getBloqueadoDesde());
+                }
+                bloqueadosSuspendidos.eliminar(p);
+                p.cambiarEstado(EstadoProceso.LISTO_SUSPENDIDO, ciclo);
+                listosSuspendidos.insertar(p);
+                huboSuspendidos = true;
+                log.registrar("Computador " + computador + ": " + p.getEtiqueta()
+                        + " pasa a Listo/Suspendido (" + a.motivo + ")");
             }
-            MotivoBloqueo m = p.getMotivoBloqueo();
-            if (m == MotivoBloqueo.SEM_VACIOS || m == MotivoBloqueo.SEM_LLENOS || m == MotivoBloqueo.SEM_MUTEX) {
-                p.sumarCiclosEnSemaforos(ciclo - p.getBloqueadoDesde());
-            }
-            bloqueados.eliminar(p);
-            p.cambiarEstado(EstadoProceso.LISTO, ciclo);
-            listos.insertar(p);
-            hubo = true;
-            log.registrar("Computador " + computador + ": " + p.getEtiqueta() + " se desbloquea (" + a.motivo + ")");
         }
-        if (hubo) {
+        if (huboListos) {
             listos.reordenar();
+        }
+        if (huboSuspendidos) {
+            listosSuspendidos.reordenar();
         }
     }
 
-    /** Baja el deadline de todos y termina a los que se les acabo. */
     private void revisarDeadlines(long ciclo) {
         ListaEnlazada<PCB> vencidos = new ListaEnlazada<>();
         revisarDeadlineEn(nuevos.recorrido(), vencidos);
         revisarDeadlineEn(listos.recorrido(), vencidos);
         revisarDeadlineEn(bloqueados.recorrido(), vencidos);
+        revisarDeadlineEn(listosSuspendidos.recorrido(), vencidos);
+        revisarDeadlineEn(bloqueadosSuspendidos.recorrido(), vencidos);
         PCB activo = cpu.getActual();
         if (activo != null && activo.descontarDeadline()) {
             vencidos.agregarAlFinal(activo);
@@ -310,7 +304,8 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         while (r.haySiguiente()) {
             terminar(r.siguiente(), true);
         }
-        listos.reordenar(); // en EDF el orden depende del deadline
+        listos.reordenar();
+        listosSuspendidos.reordenar();
     }
 
     private static void revisarDeadlineEn(Recorrido<PCB> r, ListaEnlazada<PCB> vencidos) {
@@ -322,8 +317,83 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         }
     }
 
-    /** Largo plazo: pasa de Nuevo a Listo solo si cabe en la RAM. */
+    /**
+     * Planificador de mediano plazo (Swap-Out / Swap-In):
+     * 1) Si hay procesos esperando en Nuevos o Listos/Suspendidos sin RAM suficiente,
+     *    suspende procesos Bloqueados hacia el area de intercambio (Swap) en disco.
+     * 2) Si queda RAM libre, reactiva procesos desde Listo/Suspendido (Swap-In).
+     */
+    private void planificarMedianoPlazo(long ciclo) {
+        SistemaArchivos fs = archivos;
+        Disco disco = fs != null ? fs.getDisco() : null;
+        if (disco == null || disco.getTamanoSwap() <= 0) {
+            return;
+        }
+
+        // Swap-Out de procesos bloqueados si hay procesos esperando RAM
+        while ((!nuevos.estaVacia() || !listosSuspendidos.estaVacia()) && !bloqueados.estaVacia()) {
+            int memNecesaria = !listosSuspendidos.estaVacia()
+                    ? listosSuspendidos.verPrimero().getMemoria()
+                    : nuevos.verFrente().getMemoria();
+            if (ram.hayEspacio(memNecesaria)) {
+                break;
+            }
+            PCB candidato = bloqueados.verFrente();
+            if (disco.swapLibre() < candidato.getMemoria()) {
+                break;
+            }
+            bloqueados.desencolar();
+            int bloqueSwap = disco.asignarSwap(candidato.getEtiqueta(), candidato.getMemoria());
+            candidato.setBloqueSwap(bloqueSwap);
+            ram.liberar(candidato.getMemoria());
+            candidato.cambiarEstado(EstadoProceso.BLOQUEADO_SUSPENDIDO, ciclo);
+            bloqueadosSuspendidos.encolar(candidato);
+            log.registrar("Computador " + computador + " suspende (Swap-Out) a " + candidato.getEtiqueta()
+                    + " -> Bloqueado/Suspendido (bloque swap " + bloqueSwap + ")");
+        }
+
+        // Swap-In de procesos en Listo/Suspendido cuando hay RAM disponible
+        while (!listosSuspendidos.estaVacia()) {
+            PCB p = listosSuspendidos.verPrimero();
+            if (!ram.hayEspacio(p.getMemoria())) {
+                break;
+            }
+            listosSuspendidos.extraerPrimero();
+            if (p.getBloqueSwap() >= 0) {
+                disco.liberarCadena(p.getBloqueSwap());
+                p.setBloqueSwap(-1);
+            }
+            ram.asignar(p.getMemoria());
+            p.cambiarEstado(EstadoProceso.LISTO, ciclo);
+            listos.insertar(p);
+            log.registrar("Computador " + computador + " reactiva (Swap-In) a " + p.getEtiqueta()
+                    + " -> Listo (RAM libre: " + ram.getLibre() + ")");
+        }
+
+        // Swap-In de Bloqueado/Suspendido si sobra RAM y nadie en Listo/Suspendido ni Nuevo espera
+        while (nuevos.estaVacia() && listosSuspendidos.estaVacia() && !bloqueadosSuspendidos.estaVacia()) {
+            PCB p = bloqueadosSuspendidos.verFrente();
+            if (!ram.hayEspacio(p.getMemoria())) {
+                break;
+            }
+            bloqueadosSuspendidos.desencolar();
+            if (p.getBloqueSwap() >= 0) {
+                disco.liberarCadena(p.getBloqueSwap());
+                p.setBloqueSwap(-1);
+            }
+            ram.asignar(p.getMemoria());
+            MotivoBloqueo motivoPrevio = p.getMotivoBloqueo();
+            p.bloquear(motivoPrevio, ciclo);
+            bloqueados.encolar(p);
+            log.registrar("Computador " + computador + " reactiva (Swap-In) a " + p.getEtiqueta()
+                    + " -> Bloqueado");
+        }
+    }
+
+    /** Largo plazo: pasa de Nuevo a Listo si cabe en RAM, o a Listo/Suspendido en Swap si no cabe. */
     private void revisarMemoria(long ciclo) {
+        SistemaArchivos fs = archivos;
+        Disco disco = fs != null ? fs.getDisco() : null;
         Cola<PCB> siguen = new Cola<>();
         while (!nuevos.estaVacia()) {
             PCB p = nuevos.desencolar();
@@ -333,6 +403,13 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
                 listos.insertar(p);
                 log.registrar("Computador " + computador + " admite " + p.getEtiqueta()
                         + " (RAM libre: " + ram.getLibre() + ")");
+            } else if (disco != null && disco.getTamanoSwap() > 0 && disco.swapLibre() >= p.getMemoria()) {
+                int bloqueSwap = disco.asignarSwap(p.getEtiqueta(), p.getMemoria());
+                p.setBloqueSwap(bloqueSwap);
+                p.cambiarEstado(EstadoProceso.LISTO_SUSPENDIDO, ciclo);
+                listosSuspendidos.insertar(p);
+                log.registrar("Computador " + computador + " admite " + p.getEtiqueta()
+                        + " en Swap -> Listo/Suspendido (bloque swap " + bloqueSwap + ")");
             } else {
                 siguen.encolar(p);
             }
@@ -340,7 +417,6 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         nuevos = siguen;
     }
 
-    /** Corto plazo. El cambio de contexto gasta un ciclo en modo SO. */
     private void planificar(long ciclo) {
         PCB activo = cpu.getActual();
         if (activo != null && !listos.estaVacia()) {
@@ -369,7 +445,6 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         ejecutar(activo);
     }
 
-    /** Decide que instruccion corre el proceso en este ciclo. */
     private void ejecutar(PCB p) {
         switch (p.getTipo()) {
             case CPU_BOUND -> usuario(p);
@@ -389,12 +464,6 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         }
     }
 
-    /**
-     * Proceso de E/S de archivo. Su primera instruccion es la llamada al
-     * sistema de archivos (modo SO): se arma la solicitud y el proceso queda
-     * bloqueado hasta que el disco la atienda. Lo que le quede despues son
-     * instrucciones normales de usuario.
-     */
     private void entradaSalidaArchivo(PCB p) {
         if (p.solicitudHecha()) {
             usuario(p);
@@ -410,21 +479,22 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
             return;
         }
         try {
+            if (p.getOperacionES() == TipoOperacionES.LEER
+                    && fs.intentarLeerDesdeCache(p.getRutaArchivo(), p.getUsuario(), p.getModoUsuario(), ciclo)) {
+                log.registrar("Computador " + computador + ": Cache LRU HIT para " + p.getEtiqueta()
+                        + " en " + p.getRutaArchivo() + " (servido desde RAM)");
+                return;
+            }
             solicitudPendiente = fs.prepararSolicitud(p.getOperacionES(), p.getRutaArchivo(),
                     p.getTamanoArchivo(), p.getNuevoNombre(), p.getUsuario(), p.getModoUsuario(),
                     p.getId(), p.getEtiqueta(), p, ciclo);
             bloqueoPendiente = MotivoBloqueo.ENTRADA_SALIDA;
         } catch (OperacionRechazada e) {
-            // no se bloquea: la operacion no llega al disco y el proceso sigue hasta terminar
             log.registrar("Computador " + computador + ": se rechaza " + que + " de " + p.getEtiqueta()
                     + ". " + e.getMessage());
         }
     }
 
-    /**
-     * Productor-consumidor con buffer acotado (Stallings cap. 5).
-     * Cada semWait, semSignal, insertar o extraer es 1 instruccion en modo SO.
-     */
     private void productorConsumidor(PCB p) {
         BufferAcotado b = p.getBuffer();
         boolean productor = p.getTipo() == TipoProceso.PRODUCTOR;
@@ -454,7 +524,7 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
             case ESPERAR_LLENOS -> semWait(p, b, b.getLlenos(), MotivoBloqueo.SEM_LLENOS);
             case ESPERAR_MUTEX -> {
                 semWait(p, b, b.getMutex(), MotivoBloqueo.SEM_MUTEX);
-                p.setTieneMutex(true); // si se bloquea, lo recibe al despertar
+                p.setTieneMutex(true);
             }
             case INSERTAR -> {
                 sistema(p, "insertar en " + b.getNombre());
@@ -498,7 +568,6 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         }
     }
 
-    /** semWait de Stallings: si el semaforo queda negativo el proceso se bloquea. */
     private void semWait(PCB p, BufferAcotado b, SemaforoSO s, MotivoBloqueo motivo) {
         sistema(p, "semWait(" + s.getNombre() + ") " + b.getNombre());
         boolean seBloquea;
@@ -522,7 +591,6 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         }
     }
 
-    /** semSignal de Stallings: si habia alguien esperando, lo despierta. */
     private void semSignal(PCB p, BufferAcotado b, SemaforoSO s) {
         sistema(p, "semSignal(" + s.getNombre() + ") " + b.getNombre());
         b.cerrar();
@@ -541,14 +609,12 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         cpu.cargar(p, ModoEjecucion.SISTEMA_OPERATIVO, que, true);
     }
 
-    /** Saca al proceso de la CPU y lo manda a Bloqueados con su motivo. */
     private void bloquear(PCB p, MotivoBloqueo motivo, int ciclos) {
         cpu.liberar();
         p.bloquear(motivo, ciclo);
         p.setBloqueadoDesde(ciclo);
         bloqueados.encolar(p);
         if (motivo == MotivoBloqueo.ENTRADA_SALIDA && solicitudPendiente != null) {
-            // E/S de archivo: no hay temporizador, el proceso espera a que el disco lo atienda
             SolicitudES s = solicitudPendiente;
             solicitudPendiente = null;
             log.registrar("Computador " + computador + ": " + p.getEtiqueta() + " se bloquea por E/S de disco ("
@@ -564,15 +630,17 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         }
     }
 
-    /** Termina un proceso (normal o por deadline) y libera lo que tenga. */
     private void terminar(PCB p, boolean porDeadline) {
-        boolean teniaRam = p.getEstado() != EstadoProceso.NUEVO;
+        boolean estabaSuspendido = p.estaSuspendido();
+        boolean teniaRam = p.getEstado() != EstadoProceso.NUEVO && !estabaSuspendido;
         if (cpu.getActual() == p) {
             cpu.liberar();
         }
         nuevos.eliminar(p);
         listos.eliminar(p);
         bloqueados.eliminar(p);
+        listosSuspendidos.eliminar(p);
+        bloqueadosSuspendidos.eliminar(p);
         es.cancelar(p);
         if (planificadorDisco != null) {
             planificadorDisco.cancelarDe(p.getId());
@@ -583,6 +651,10 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         if (teniaRam) {
             ram.liberar(p.getMemoria());
         }
+        if (p.getBloqueSwap() >= 0 && archivos != null) {
+            archivos.getDisco().liberarCadena(p.getBloqueSwap());
+            p.setBloqueSwap(-1);
+        }
         if (porDeadline) {
             p.terminarPorDeadline(ciclo);
         } else {
@@ -592,10 +664,10 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         estadisticas.registrarFin(p, ciclo);
         log.registrar("Computador " + computador + ": " + p.getEtiqueta()
                 + (porDeadline ? " TERMINADO por deadline vencido" : " termina"));
-        revisarMemoria(ciclo); // se libero RAM
+        planificarMedianoPlazo(ciclo);
+        revisarMemoria(ciclo);
     }
 
-    /** Si muere a mitad del protocolo devuelve mutex, hueco o signal pendiente. */
     private void liberarBuffer(PCB p) {
         BufferAcotado b = p.getBuffer();
         boolean productor = p.getTipo() == TipoProceso.PRODUCTOR;
@@ -625,6 +697,8 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         actualizarCiclosEn(nuevos.recorrido());
         actualizarCiclosEn(listos.recorrido());
         actualizarCiclosEn(bloqueados.recorrido());
+        actualizarCiclosEn(listosSuspendidos.recorrido());
+        actualizarCiclosEn(bloqueadosSuspendidos.recorrido());
         PCB activo = cpu.getActual();
         if (activo != null) {
             activo.registrarCicloTranscurrido();
@@ -647,10 +721,6 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         estadisticas.getUtilizacion().agregar(n == 0 ? 0 : (double) suma / n);
     }
 
-    // =================================================================
-    //  Foto para la GUI (la GUI solo mira)
-    // =================================================================
-
     public FotoSistema foto() {
         candado.cerrar();
         try {
@@ -667,6 +737,8 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
             f.nuevos = filas(nuevos.recorrido(), nuevos.tamano());
             f.listos = filas(listos.recorrido(), listos.tamano());
             f.bloqueados = filas(bloqueados.recorrido(), bloqueados.tamano());
+            f.listosSuspendidos = filas(listosSuspendidos.recorrido(), listosSuspendidos.tamano());
+            f.bloqueadosSuspendidos = filas(bloqueadosSuspendidos.recorrido(), bloqueadosSuspendidos.tamano());
             f.terminados = filas(terminados.recorrido(), terminados.tamano());
             return f;
         } finally {
@@ -685,9 +757,10 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
 
     public DispositivoES getES() { return es; }
     public Estadisticas getEstadisticas() { return estadisticas; }
-
     public Cola<PCB> getNuevos() { return nuevos; }
     public ListaOrdenada<PCB> getListos() { return listos; }
     public Cola<PCB> getBloqueados() { return bloqueados; }
+    public ListaOrdenada<PCB> getListosSuspendidos() { return listosSuspendidos; }
+    public Cola<PCB> getBloqueadosSuspendidos() { return bloqueadosSuspendidos; }
     public Cola<PCB> getTerminados() { return terminados; }
 }

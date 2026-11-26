@@ -13,10 +13,6 @@ import unimet.avilaos.so.planificacion.TipoPolitica;
 /**
  * Lee el JSON de procesos y configuracion del enunciado
  * (globalConfig + computer + processes).
- *
- * Campos opcionales que no estan en el enunciado: headSpeed en globalConfig
- * (posiciones que recorre el cabezal por ciclo, 4 si no viene) y, por
- * proceso, priority, user, mode (ADMIN o USER) y newName para renombrar.
  */
 public final class ArchivoProcesos {
 
@@ -27,7 +23,6 @@ public final class ArchivoProcesos {
         return desdeValor(Json.leerArchivo(archivo));
     }
 
-    /** Si algo esta mal lanza ErrorJson con un mensaje que se le puede mostrar al usuario. */
     public static ConfiguracionProcesos desdeTexto(String json) {
         return desdeValor(Json.leer(json));
     }
@@ -41,6 +36,7 @@ public final class ArchivoProcesos {
         ValorJson global = raiz.objetoEn("globalConfig");
         cfg.duracionCiclo = minimo(global.enteroEn("cycleDurationMs"), 1, "cycleDurationMs");
         cfg.tamanoSwap = minimo(global.enteroEn("swapSizeBlocks"), 0, "swapSizeBlocks");
+        cfg.tamanoCache = minimo(global.enteroEn("cacheSizeBlocks", cfg.tamanoCache), 0, "cacheSizeBlocks");
         cfg.posicionesPorCiclo = minimo(global.enteroEn("headSpeed", cfg.posicionesPorCiclo), 1, "headSpeed");
         try {
             cfg.politicaDisco = TipoPoliticaDisco.desdeTexto(global.textoEn("initialDiskPolicy"));
@@ -123,6 +119,6 @@ public final class ArchivoProcesos {
         if (t.startsWith("USER") || t.startsWith("USUARIO")) {
             return ModoUsuario.USUARIO;
         }
-        throw new ErrorJson("Modo de usuario desconocido: " + texto);
+        throw new ErrorJson("Modo de usuario desconocido: " + texto + " (use ADMIN o USER)");
     }
 }

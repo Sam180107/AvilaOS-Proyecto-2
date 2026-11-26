@@ -12,7 +12,7 @@ public class NodoArchivo {
     private String nombre;
     private final TipoNodo tipo;
     private final String dueno;
-    private final Permiso permiso;
+    private Permiso permiso;
     private NodoArchivo padre;
     private final ListaEnlazada<NodoArchivo> hijos = new ListaEnlazada<>();
 
@@ -27,45 +27,16 @@ public class NodoArchivo {
         this.permiso = permiso;
     }
 
-    public String getNombre() {
-        return nombre;
-    }
+    public String getNombre() { return nombre; }
+    public TipoNodo getTipo() { return tipo; }
+    public boolean esDirectorio() { return tipo == TipoNodo.DIRECTORIO; }
+    public String getDueno() { return dueno; }
+    public Permiso getPermiso() { return permiso; }
+    public NodoArchivo getPadre() { return padre; }
+    public int getTamanoBloques() { return tamanoBloques; }
+    public int getPrimerBloque() { return primerBloque; }
+    public String getProcesoCreador() { return procesoCreador; }
 
-    public TipoNodo getTipo() {
-        return tipo;
-    }
-
-    public boolean esDirectorio() {
-        return tipo == TipoNodo.DIRECTORIO;
-    }
-
-    public String getDueno() {
-        return dueno;
-    }
-
-    public Permiso getPermiso() {
-        return permiso;
-    }
-
-    public NodoArchivo getPadre() {
-        return padre;
-    }
-
-    public int getTamanoBloques() {
-        return tamanoBloques;
-    }
-
-    /** Direccion del primer bloque, o -1 si es un directorio. */
-    public int getPrimerBloque() {
-        return primerBloque;
-    }
-
-    /** Proceso de E/S que lo creo ("-" si vino del JSON). */
-    public String getProcesoCreador() {
-        return procesoCreador;
-    }
-
-    /** Ruta completa desde la raiz, por ejemplo /usuarios/notas.txt. */
     public String getRuta() {
         if (padre == null) {
             return "/";
@@ -74,13 +45,8 @@ public class NodoArchivo {
         return base.equals("/") ? "/" + nombre : base + "/" + nombre;
     }
 
-    public int cantidadHijos() {
-        return hijos.tamano();
-    }
-
-    public Recorrido<NodoArchivo> hijos() {
-        return hijos.recorrido();
-    }
+    public int cantidadHijos() { return hijos.tamano(); }
+    public Recorrido<NodoArchivo> hijos() { return hijos.recorrido(); }
 
     public NodoArchivo hijo(String nombreHijo) {
         Recorrido<NodoArchivo> r = hijos.recorrido();
@@ -103,9 +69,8 @@ public class NodoArchivo {
         n.padre = null;
     }
 
-    void setNombre(String nombre) {
-        this.nombre = nombre;
-    }
+    void setNombre(String nombre) { this.nombre = nombre; }
+    void setPermiso(Permiso permiso) { this.permiso = permiso; }
 
     void setBloques(int primerBloque, int tamanoBloques) {
         this.primerBloque = primerBloque;
@@ -116,7 +81,6 @@ public class NodoArchivo {
         this.procesoCreador = procesoCreador;
     }
 
-    /** Asi lo muestra el JTree. */
     @Override
     public String toString() {
         return padre == null ? "/" : nombre;
