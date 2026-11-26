@@ -1,0 +1,25 @@
+digraph estados {
+  graph [fontname="DejaVu Sans", pad=0.3, splines=true, outputorder=edgesfirst, sep="+4", esep="+2", overlap=true];
+  node [shape=box, style="rounded,filled", fillcolor="#F4F4F4", fontname="DejaVu Sans", fontsize=12, width=1.9, height=0.5, fixedsize=true];
+  edge [fontname="DejaVu Sans", fontsize=10, color="#444444"];
+  inicio [shape=circle, label="", width=0.2, height=0.2, style=filled, fillcolor="#222222", pos="1.5,9.2!"];
+  N  [label="Nuevo", pos="1.5,8.0!"];
+  L  [label="Listo", pos="1.5,6.2!"];
+  E  [label="Ejecución", pos="1.5,4.0!"];
+  T  [label="Terminado", pos="1.5,2.2!"];
+  fin [shape=doublecircle, label="", width=0.16, height=0.16, style=filled, fillcolor="#222222", pos="1.5,1.2!"];
+  B  [label="Bloqueado", pos="6.0,4.0!"];
+  LS [label="Listo/Suspendido", fillcolor="#E6F1FB", width=2.3, pos="10.0,6.2!"];
+  BS [label="Bloqueado/Suspendido", fillcolor="#E6F1FB", width=2.3, pos="10.0,4.0!"];
+  inicio -> N [label="crearProcesoES()"];
+  N -> L [label="admitir: cabe en la RAM"];
+  L -> E [label="despacho", tailport=sw, headport=nw];
+  E -> L [label="fin de quantum", tailport=ne, headport=se];
+  E -> B [label="pide el disco"];
+  B -> L [label="el disco termina"];
+  E -> T [label="fin o deadline"];
+  T -> fin;
+  B -> BS [label="SUSPENDER al swap"];
+  BS -> LS [label="ocurre su evento"];
+  LS -> L [label="REACTIVAR desde el swap"];
+}
