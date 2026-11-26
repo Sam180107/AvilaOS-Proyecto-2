@@ -20,6 +20,7 @@ public class SolicitudES {
     private final long cicloLlegada;
 
     private String dato;
+    private String permisoNuevo;
     private long cicloInicio = -1;
     private long cicloFin = -1;
     private int hechos = 0;
@@ -100,6 +101,15 @@ public class SolicitudES {
 
     public void setDato(String dato) {
         this.dato = dato;
+    }
+
+    /** En ACTUALIZAR: permiso nuevo del archivo (PUBLICO/PRIVADO), o null si no cambia. */
+    public String getPermisoNuevo() {
+        return permisoNuevo;
+    }
+
+    public void setPermisoNuevo(String permisoNuevo) {
+        this.permisoNuevo = permisoNuevo;
     }
 
     public long getCicloInicio() {
