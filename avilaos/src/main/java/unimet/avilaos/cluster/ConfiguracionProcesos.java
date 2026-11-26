@@ -1,6 +1,7 @@
 package unimet.avilaos.cluster;
 
 import unimet.avilaos.estructuras.ListaEnlazada;
+import unimet.avilaos.so.archivos.SistemaArchivos;
 import unimet.avilaos.so.disco.TipoPoliticaDisco;
 import unimet.avilaos.so.planificacion.TipoPolitica;
 
@@ -9,6 +10,7 @@ public class ConfiguracionProcesos {
 
     public int duracionCiclo = 300;
     public int tamanoSwap = 100;
+    public int tamanoCache = SistemaArchivos.CACHE_POR_DEFECTO;
     /** Posiciones que recorre el cabezal en un ciclo de reloj. */
     public int posicionesPorCiclo = 4;
     public TipoPoliticaDisco politicaDisco = TipoPoliticaDisco.FIFO;
