@@ -26,6 +26,7 @@ public class PanelComputador extends JPanel {
     private final JComboBox<TipoPolitica> politica = new JComboBox<>(TipoPolitica.values());
     private final JLabel modo = new JLabel();
     private final JLabel cpu = new JLabel();
+    private final JLabel suspension = new JLabel();
     private final JProgressBar ram = new JProgressBar();
     private final JTabbedPane colas = new JTabbedPane();
     private final ModeloTablaSoloLectura enCpu = new ModeloTablaSoloLectura(FotoSistema.COLUMNAS);
@@ -61,6 +62,7 @@ public class PanelComputador extends JPanel {
         fila.add(modo);
         arriba.add(fila);
         arriba.add(cpu);
+        arriba.add(suspension);
         ram.setStringPainted(true);
         arriba.add(ram);
 
@@ -99,6 +101,9 @@ public class PanelComputador extends JPanel {
         cpu.setText(f.enCpu == null ? "CPU: libre"
                 : "CPU: " + f.enCpu[0] + " PC=" + f.pcEnCpu + " Prioridad=" + f.enCpu[5]
                 + " Deadline=" + f.enCpu[7] + " Instruccion: " + f.instruccion);
+        suspension.setText("Planificador a mediano plazo: " + f.suspensiones + " suspensiones, "
+                + f.reactivaciones + " reactivaciones (en swap: " + f.listosSuspendidos.length + " listos, "
+                + f.bloqueadosSuspendidos.length + " bloqueados)");
         ram.setMaximum(Math.max(1, f.memTotal));
         ram.setValue(f.memUsada);
         ram.setString("RAM usada " + f.memUsada + " / " + f.memTotal + " (libre " + (f.memTotal - f.memUsada) + ")");

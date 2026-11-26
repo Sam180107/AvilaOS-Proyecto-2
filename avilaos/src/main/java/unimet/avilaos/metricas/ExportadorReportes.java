@@ -3,6 +3,7 @@ package unimet.avilaos.metricas;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.nio.file.Files;
 import unimet.avilaos.cluster.Cluster;
 import unimet.avilaos.hardware.Computador;
@@ -93,6 +94,10 @@ public final class ExportadorReportes {
         sb.append("Listos/Suspendidos (Swap): ").append(foto.listosSuspendidos.length).append('\n');
         sb.append("Bloqueados/Suspendidos (Swap): ").append(foto.bloqueadosSuspendidos.length).append('\n');
         sb.append("Terminados: ").append(foto.terminados.length).append('\n');
+        sb.append('\n');
+        sb.append("--- 5. SUSPENSION DE PROCESOS (PLANIFICADOR A MEDIANO PLAZO) ---\n");
+        sb.append("Suspensiones: ").append(foto.suspensiones).append('\n');
+        sb.append("Reactivaciones: ").append(foto.reactivaciones).append('\n');
         return sb.toString();
     }
 
@@ -107,11 +112,11 @@ public final class ExportadorReportes {
         sb.append("Seccion,Metrica,Valor\n");
         sb.append("General,Ciclo,").append(cluster.getReloj().getCiclo()).append('\n');
         sb.append("CPU,Politica,").append(comp.getOs().getTipoPolitica().getEtiqueta()).append('\n');
-        sb.append("CPU,Throughput_Proc_Por_Ciclo,").append(String.format("%.4f", cluster.throughputGlobal())).append('\n');
-        sb.append("CPU,Utilizacion_Porcentaje,").append(String.format("%.2f", cluster.utilizacionGlobal() * 100.0)).append('\n');
-        sb.append("CPU,Respuesta_Promedio_Ciclos,").append(String.format("%.2f", est.getRespuestaPromedio())).append('\n');
-        sb.append("CPU,Cumplimiento_Deadlines_Porcentaje,").append(String.format("%.2f", est.getCumplimientoDeadlines() * 100.0)).append('\n');
-        sb.append("CPU,Indice_Equidad_Jain,").append(String.format("%.4f", est.getEquidad())).append('\n');
+        sb.append("CPU,Throughput_Proc_Por_Ciclo,").append(String.format(Locale.ROOT, "%.4f", cluster.throughputGlobal())).append('\n');
+        sb.append("CPU,Utilizacion_Porcentaje,").append(String.format(Locale.ROOT, "%.2f", cluster.utilizacionGlobal() * 100.0)).append('\n');
+        sb.append("CPU,Respuesta_Promedio_Ciclos,").append(String.format(Locale.ROOT, "%.2f", est.getRespuestaPromedio())).append('\n');
+        sb.append("CPU,Cumplimiento_Deadlines_Porcentaje,").append(String.format(Locale.ROOT, "%.2f", est.getCumplimientoDeadlines() * 100.0)).append('\n');
+        sb.append("CPU,Indice_Equidad_Jain,").append(String.format(Locale.ROOT, "%.4f", est.getEquidad())).append('\n');
         sb.append("CPU,Completados,").append(est.getCompletados()).append('\n');
         sb.append("CPU,Vencidos,").append(est.getVencidos()).append('\n');
         sb.append("Memoria,RAM_Usada,").append(comp.getRam().getUsada()).append('\n');
@@ -126,17 +131,19 @@ public final class ExportadorReportes {
             sb.append("Swap,Bloques_Totales,").append(disco.getTamanoSwap()).append('\n');
             sb.append("Disco,Desplazamiento_Cabezal_Bloques,").append(disco.getDesplazamientoTotal()).append('\n');
             sb.append("Disco,Solicitudes_Atendidas,").append(md.getTotalAtendidas()).append('\n');
-            sb.append("Disco,Espera_Promedio_Ciclos,").append(String.format("%.2f", md.esperaPromedio())).append('\n');
+            sb.append("Disco,Espera_Promedio_Ciclos,").append(String.format(Locale.ROOT, "%.2f", md.esperaPromedio())).append('\n');
             for (TipoPoliticaDisco t : TipoPoliticaDisco.values()) {
                 sb.append("Disco_Politica,").append(t.getEtiqueta()).append(',').append(md.atendidasCon(t)).append('\n');
             }
         }
+        sb.append("Suspension,Suspensiones,").append(comp.getOs().getSuspensiones()).append('\n');
+        sb.append("Suspension,Reactivaciones,").append(comp.getOs().getReactivaciones()).append('\n');
         if (cache != null) {
             sb.append("Cache_LRU,Bloques_Ocupados,").append(cache.getOcupados()).append('\n');
             sb.append("Cache_LRU,Capacidad,").append(cache.getCapacidad()).append('\n');
             sb.append("Cache_LRU,Hits,").append(cache.getHits()).append('\n');
             sb.append("Cache_LRU,Misses,").append(cache.getMisses()).append('\n');
-            sb.append("Cache_LRU,Tasa_Aciertos_Porcentaje,").append(String.format("%.2f", cache.getTasaAciertos() * 100.0)).append('\n');
+            sb.append("Cache_LRU,Tasa_Aciertos_Porcentaje,").append(String.format(Locale.ROOT, "%.2f", cache.getTasaAciertos() * 100.0)).append('\n');
         }
         return sb.toString();
     }

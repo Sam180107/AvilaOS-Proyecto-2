@@ -56,14 +56,14 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
     private final JComboBox<String> usuario = new JComboBox<>();
     private final ModeloTablaSoloLectura tablaMetricas = new ModeloTablaSoloLectura(new String[] {
         "Computador", "Throughput (proc/ciclo)", "Uso de CPU", "T. respuesta prom.",
-        "Cumplen deadline", "Equidad (Jain)", "Completados", "Vencidos"
+        "Cumplen deadline", "Equidad (Jain)", "Completados", "Vencidos", "Suspensiones", "Reactivaciones"
     });
     private final JTextArea log = new JTextArea();
     private final Timer refresco = new Timer(100, e -> refrescar());
     private long versionUsuarios = -1;
 
     public VentanaPrincipal(Cluster cluster) {
-        super("AvilaOS - Proyecto 2: disco, sistema de archivos, cache LRU y planificacion de E/S");
+        super("AvilaOS - Proyecto 2: disco, sistema de archivos, planificacion de E/S y suspension");
         this.cluster = cluster;
 
         JPanel barra = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
@@ -113,7 +113,9 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
         JTabbedPane abajo = new JTabbedPane();
         abajo.addTab("Cola de E/S del disco", panelCola);
         abajo.addTab("Tabla de asignacion", tablaAsignacion);
-        abajo.addTab("Cache LRU (RAM)", panelCache);
+        if (cluster.getSistemaArchivos().getCache().getCapacidad() > 0) {
+            abajo.addTab("Cache LRU (RAM)", panelCache);
+        }
         abajo.addTab("Computador y colas", panelComputador);
         abajo.addTab("Metricas", new JScrollPane(new JTable(tablaMetricas)));
         abajo.addTab("Desplazamiento del cabezal", graficaDesplazamiento);
@@ -298,7 +300,9 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
             pct(e.getCumplimientoDeadlines()),
             num(e.getEquidad()),
             e.getCompletados(),
-            e.getVencidos()
+            e.getVencidos(),
+            c.getOs().getSuspensiones(),
+            c.getOs().getReactivaciones()
         }});
     }
 
