@@ -5,6 +5,7 @@ import java.awt.GridLayout;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTree;
@@ -18,12 +19,13 @@ import unimet.avilaos.estructuras.Recorrido;
 import unimet.avilaos.gui.ArbolArchivosModelo.NodoVista;
 import unimet.avilaos.gui.DialogoOperacionArchivo.Accion;
 import unimet.avilaos.so.archivos.EntradaArchivo;
+import unimet.avilaos.so.archivos.OperacionRechazada;
+import unimet.avilaos.so.archivos.Permiso;
 import unimet.avilaos.so.archivos.SistemaArchivos;
 
 /**
  * JTree con la estructura de directorios y archivos, la informacion del
- * elemento seleccionado y los botones de CRUD. Cada boton abre un dialogo que
- * crea un proceso de E/S: este panel nunca modifica el sistema de archivos.
+ * elemento seleccionado y los botones de CRUD y permisos.
  */
 public class PanelArchivos extends JPanel {
 
@@ -80,6 +82,9 @@ public class PanelArchivos extends JPanel {
         botones.add(boton("Leer...", Accion.LEER));
         botones.add(boton("Renombrar...", Accion.RENOMBRAR));
         botones.add(boton("Eliminar...", Accion.ELIMINAR));
+        JButton btnPermiso = new JButton("Cambiar permiso");
+        btnPermiso.addActionListener(e -> alternarPermiso());
+        botones.add(btnPermiso);
 
         JPanel sur = new JPanel(new BorderLayout());
         sur.add(info, BorderLayout.CENTER);
@@ -96,7 +101,26 @@ public class PanelArchivos extends JPanel {
         return b;
     }
 
-    /** Vuelve a armar el arbol solo si el sistema de archivos cambio. */
+    private void alternarPermiso() {
+        EntradaArchivo e = seleccion();
+        if (e == null || "/".equals(e.ruta())) {
+            JOptionPane.showMessageDialog(this, "Seleccione un archivo o directorio valido.",
+                    "Permisos", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        Permiso nuevo = e.permiso() == Permiso.PUBLICO ? Permiso.PRIVADO : Permiso.PUBLICO;
+        try {
+            cluster.getSistemaArchivos().cambiarPermiso(e.ruta(), nuevo, contexto.usuario(), contexto.modo());
+            cluster.getLog().registrar("Permiso de " + e.ruta() + " cambiado a "
+                    + nuevo.getEtiqueta() + " por " + contexto.usuario());
+            refrescar();
+        } catch (OperacionRechazada ex) {
+            cluster.getLog().registrar("Cambio de permiso rechazado (" + contexto.usuario() + "): " + ex.getMessage());
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Operacion no permitida",
+                    JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
     public void refrescar() {
         SistemaArchivos fs = cluster.getSistemaArchivos();
         if (fs == null || fs.getVersion() == versionVista) {
@@ -110,7 +134,7 @@ public class PanelArchivos extends JPanel {
             modelo.actualizar(fs.instantanea());
             NodoVista raiz = (NodoVista) modelo.getRoot();
             if (primeraVez) {
-                recordarDirectorios(raiz); // al cargar, se ve todo el arbol abierto
+                recordarDirectorios(raiz);
             }
             restaurar(new TreePath(raiz), raiz, seleccionada);
         } finally {
