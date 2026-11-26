@@ -16,7 +16,7 @@ import unimet.avilaos.so.proceso.PCB;
 public class SistemaArchivos {
 
     public static final String ADMIN = "admin";
-    public static final int CACHE_POR_DEFECTO = 16;
+    public static final int CACHE_POR_DEFECTO = 0;
 
     private final Mutex mutex = new Mutex();
     private volatile long version = 0;
@@ -175,6 +175,17 @@ public class SistemaArchivos {
         }
     }
 
+    private void ponerPermiso(String ruta, Permiso nuevo) {
+        mutex.cerrar();
+        try {
+            NodoArchivo n = existente(ruta);
+            n.setPermiso(nuevo);
+            version++;
+        } finally {
+            mutex.abrir();
+        }
+    }
+
     /** Cambia el permiso (Publico/Privado) si el usuario es administrador o dueno. */
     public void cambiarPermiso(String ruta, Permiso nuevoPermiso, String usuario, ModoUsuario modo) {
         if (nuevoPermiso == null) {
@@ -229,7 +240,7 @@ public class SistemaArchivos {
         int[] bloques;
         mutex.cerrar();
         try {
-            validarPermisoSinMutex(TipoOperacionES.LEER, ruta, usuario, modo);
+            validarPermisoSinMutex(TipoOperacionES.LEER, ruta, usuario, modo, false);
             NodoArchivo n = existente(ruta);
             bloques = bloquesDe(n);
         } finally {
@@ -244,20 +255,29 @@ public class SistemaArchivos {
     // ---------- permisos ----------
 
     public void validarPermiso(TipoOperacionES operacion, String ruta, String usuario, ModoUsuario modo) {
+        validarPermiso(operacion, ruta, usuario, modo, 1);
+    }
+
+    /** @param tamanoBloques al crear: 0 es un directorio, 1 o mas un archivo. */
+    public void validarPermiso(TipoOperacionES operacion, String ruta, String usuario, ModoUsuario modo,
+                               int tamanoBloques) {
         mutex.cerrar();
         try {
-            validarPermisoSinMutex(operacion, ruta, usuario, modo);
+            validarPermisoSinMutex(operacion, ruta, usuario, modo, tamanoBloques <= 0);
         } finally {
             mutex.abrir();
         }
     }
 
     private void validarPermisoSinMutex(TipoOperacionES operacion, String ruta, String usuario,
-                                        ModoUsuario modo) {
+                                        ModoUsuario modo, boolean esDirectorio) {
         if (!operacion.esDeArchivo()) {
             throw new OperacionRechazada(operacion.getEtiqueta() + " no es una operacion de archivos");
         }
         if (operacion == TipoOperacionES.CREAR) {
+            if (modo == ModoUsuario.USUARIO && esDirectorio) {
+                throw new OperacionRechazada("Modo usuario: solo el administrador puede crear directorios");
+            }
             NodoArchivo padre = padreParaCrear(ruta);
             if (modo == ModoUsuario.USUARIO && !padre.getDueno().equals(usuario)) {
                 throw new OperacionRechazada("Modo usuario: " + usuario + " solo puede crear dentro de"
@@ -289,13 +309,18 @@ public class SistemaArchivos {
         int[] bloques;
         mutex.cerrar();
         try {
-            validarPermisoSinMutex(operacion, ruta, usuario, modo);
+            validarPermisoSinMutex(operacion, ruta, usuario, modo, tamanoBloques <= 0);
+            Permiso pedido = pcb == null ? null : pcb.getNuevoPermiso();
+            String dueno = usuario;
+            if (modo == ModoUsuario.ADMINISTRADOR && pcb != null && pcb.getDuenoNuevo() != null) {
+                dueno = pcb.getDuenoNuevo();
+            }
             switch (operacion) {
                 case CREAR -> {
                     NodoArchivo padre = padreParaCrear(ruta);
                     if (tamanoBloques <= 0) {
                         padre.agregarHijo(new NodoArchivo(nombreDe(ruta), TipoNodo.DIRECTORIO,
-                                usuario, Permiso.PUBLICO));
+                                dueno, pedido == null ? Permiso.PUBLICO : pedido));
                         version++;
                         bloques = new int[0];
                     } else {
@@ -305,13 +330,16 @@ public class SistemaArchivos {
                         } catch (IllegalStateException e) {
                             throw new OperacionRechazada("No se puede crear " + ruta + ": " + e.getMessage());
                         }
-                        colgarArchivo(padre, ruta, primero, tamanoBloques, usuario, Permiso.PRIVADO,
-                                nombreProceso);
+                        colgarArchivo(padre, ruta, primero, tamanoBloques, dueno,
+                                pedido == null ? Permiso.PRIVADO : pedido, nombreProceso);
                         bloques = disco.cadena(primero);
                     }
                 }
                 case ACTUALIZAR -> {
                     NodoArchivo n = existente(ruta);
+                    if (n == raiz) {
+                        throw new OperacionRechazada("La raiz no se puede actualizar");
+                    }
                     if (nuevoNombre != null && !nuevoNombre.trim().isEmpty()) {
                         validarNombre(nuevoNombre);
                     }
@@ -324,6 +352,9 @@ public class SistemaArchivos {
         }
         SolicitudES s = new SolicitudES(operacion, ruta, bloques, idProceso, nombreProceso, pcb, ciclo);
         s.setDato(nuevoNombre);
+        if (operacion == TipoOperacionES.ACTUALIZAR && pcb != null && pcb.getNuevoPermiso() != null) {
+            s.setPermisoNuevo(pcb.getNuevoPermiso().name());
+        }
         return s;
     }
 
@@ -339,9 +370,18 @@ public class SistemaArchivos {
                     return "Se elimino " + s.getRuta() + " y se liberaron " + n + " bloques";
                 }
                 case ACTUALIZAR -> {
+                    String hecho = "";
+                    if (s.getPermisoNuevo() != null) {
+                        Permiso nuevo = Permiso.valueOf(s.getPermisoNuevo());
+                        ponerPermiso(s.getRuta(), nuevo);
+                        hecho = "Permiso de " + s.getRuta() + " cambiado a " + nuevo.getEtiqueta();
+                    }
                     if (s.getDato() != null && !s.getDato().trim().isEmpty()) {
                         renombrar(s.getRuta(), s.getDato());
-                        return s.getRuta() + " ahora se llama " + s.getDato();
+                        return (hecho.isEmpty() ? "" : hecho + ". ") + s.getRuta() + " ahora se llama " + s.getDato();
+                    }
+                    if (!hecho.isEmpty()) {
+                        return hecho;
                     }
                     cache.cargarBloques(s.getBloques(), s.getRuta(), ciclo);
                     return "Se actualizo " + s.getRuta();
