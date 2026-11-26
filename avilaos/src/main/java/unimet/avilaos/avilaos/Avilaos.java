@@ -4,7 +4,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 import unimet.avilaos.gui.VentanaPrincipal;
 
-/** Punto de entrada. Abre la ventana de configuracion y despues la principal. */
+/** Punto de entrada. Abre la ventana de carga de los dos JSON y despues la principal. */
 public class Avilaos {
 
     public static void main(String[] args) {
