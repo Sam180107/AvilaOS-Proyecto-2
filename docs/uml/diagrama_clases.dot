@@ -1,0 +1,117 @@
+digraph clases {
+  graph [rankdir=TB, fontname="DejaVu Sans", fontsize=11, nodesep=0.35, ranksep=0.55, pad=0.2, newrank=true];
+  node [shape=plain, fontname="DejaVu Sans", fontsize=9];
+  edge [fontname="DejaVu Sans", fontsize=8, color="#444444"];
+
+
+  Cluster [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>Cluster</b></td></tr>
+   <tr><td align="left">- archivos: SistemaArchivos<br align="left"/>- planificadorDisco: PlanificadorDisco<br align="left"/></td></tr>
+   <tr><td align="left">+ crear(cfg, fs): Cluster<br align="left"/>+ crearProcesoES(e): PCB<br align="left"/>+ cambiarPoliticaDisco(t)<br align="left"/>+ detenerDisco(b)<br align="left"/></td></tr></table>>];
+
+  Reloj [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>RelojGlobal</b></td></tr>
+   <tr><td align="left">- ciclo: long<br align="left"/></td></tr>
+   <tr><td align="left">+ iniciar() / pausar() / paso()<br align="left"/></td></tr></table>>];
+
+  Comp [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>Computador</b></td></tr>
+   <tr><td align="left">- cpu: CPU<br align="left"/>- ram: MemoriaPrincipal<br align="left"/></td></tr>
+   <tr><td align="left">+ alTick(ciclo)<br align="left"/>+ instalarDisco(d)<br align="left"/></td></tr></table>>];
+
+  IReloj [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#E6F1FB">
+   <tr><td>«interface»<br/><b>ComponenteDeReloj</b></td></tr>
+   <tr><td align="left">+ alTick(ciclo)<br align="left"/></td></tr></table>>];
+
+  SO [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>SistemaOperativo</b></td></tr>
+   <tr><td align="left">- nuevos, bloqueados: Cola&lt;PCB&gt;<br align="left"/>- listos, listosSuspendidos: ListaOrdenada&lt;PCB&gt;<br align="left"/>- bloqueadosSuspendidos: Cola&lt;PCB&gt;<br align="left"/>- suspensiones, reactivaciones: long<br align="left"/></td></tr>
+   <tr><td align="left">+ alTick(ciclo)<br align="left"/>+ solicitudCompletada(s, ciclo)<br align="left"/>- gestionarMemoria(ciclo)<br align="left"/>- suspenderPara(pcb, disco, ciclo)<br align="left"/>- atenderSwapTerminados(ciclo)<br align="left"/>+ foto(): FotoSistema<br align="left"/></td></tr></table>>];
+
+  PCB [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>PCB</b></td></tr>
+   <tr><td align="left">- estado: EstadoProceso<br align="left"/>- operacion: TipoOperacionES<br align="left"/>- ruta: String<br align="left"/>- memoria: int<br align="left"/>- bloqueSwap: int<br align="left"/>- transitoSwap: TransitoSwap<br align="left"/></td></tr>
+   <tr><td align="left">+ cambiarEstado(e, ciclo)<br align="left"/></td></tr></table>>];
+
+  IOyente [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#E6F1FB">
+   <tr><td>«interface»<br/><b>OyenteDisco</b></td></tr>
+   <tr><td align="left">+ solicitudCompletada(s, ciclo)<br align="left"/></td></tr></table>>];
+
+  FS [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>SistemaArchivos</b></td></tr>
+   <tr><td align="left">- raiz: NodoArchivo<br align="left"/>- mutex: Mutex<br align="left"/></td></tr>
+   <tr><td align="left">+ prepararSolicitud(...): SolicitudES<br align="left"/>+ aplicar(s): String<br align="left"/>+ validarPermiso(op, ruta, usuario, modo)<br align="left"/></td></tr></table>>];
+
+  Nodo [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>NodoArchivo</b></td></tr>
+   <tr><td align="left">- nombre, dueno: String<br align="left"/>- tipo: TipoNodo<br align="left"/>- permiso: Permiso<br align="left"/>- primerBloque, tamanoBloques: int<br align="left"/>- hijos: ListaEnlazada&lt;NodoArchivo&gt;<br align="left"/></td></tr></table>>];
+
+  Disco [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>Disco</b></td></tr>
+   <tr><td align="left">- bloques: Bloque[]<br align="left"/>- cabezal: int<br align="left"/>- direccion: DireccionCabezal<br align="left"/>- posicionesPorCiclo: int<br align="left"/></td></tr>
+   <tr><td align="left">+ alTick(ciclo)<br align="left"/>+ asignarCadena(dueno, n): int<br align="left"/>+ asignarSwap(dueno, n): int<br align="left"/>+ cadena(primero): int[]<br align="left"/>+ liberarCadena(primero)<br align="left"/>+ setDetenido(b)<br align="left"/></td></tr></table>>];
+
+  Bloque [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>Bloque</b></td></tr>
+   <tr><td align="left">- numero: int<br align="left"/>- uso: UsoBloque<br align="left"/>- ocupante: String<br align="left"/>- siguiente: int<br align="left"/></td></tr></table>>];
+
+  ICtrl [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#E6F1FB">
+   <tr><td>«interface»<br/><b>ControladorDisco</b></td></tr>
+   <tr><td align="left">+ siguiente(cabezal, dir, ultimo, ciclo): DecisionDisco<br align="left"/>+ completada(s, ciclo)<br align="left"/></td></tr></table>>];
+
+  Plan [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>PlanificadorDisco</b></td></tr>
+   <tr><td align="left">- cola: ListaEnlazada&lt;SolicitudES&gt;<br align="left"/>- politica: PoliticaDisco<br align="left"/>- metricas: MetricasDisco<br align="left"/></td></tr>
+   <tr><td align="left">+ encolar(s)<br align="left"/>+ cambiarPolitica(t)<br align="left"/>+ cancelarDe(idProceso)<br align="left"/></td></tr></table>>];
+
+  IPol [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#E6F1FB">
+   <tr><td>«interface»<br/><b>PoliticaDisco</b></td></tr>
+   <tr><td align="left">+ nombre(): String<br align="left"/>+ decidir(cola, cabezal, dir, ultimo): DecisionDisco<br align="left"/></td></tr></table>>];
+
+  Pols [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>PoliticaFIFO, PoliticaSSTF, PoliticaSCAN,<br/>PoliticaCSCAN, PoliticaLOOK, PoliticaCLOOK</b></td></tr></table>>];
+
+  Fab [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>FabricaPoliticasDisco</b></td></tr>
+   <tr><td align="left">+ crear(tipo): PoliticaDisco<br align="left"/></td></tr></table>>];
+
+  Sol [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>SolicitudES</b></td></tr>
+   <tr><td align="left">- operacion: TipoOperacionES<br align="left"/>- ruta: String<br align="left"/>- bloques: int[]<br align="left"/>- pcb: PCB<br align="left"/></td></tr></table>>];
+
+  Gui [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#F4F4F4">
+   <tr><td bgcolor="#D9D9D9"><b>VentanaPrincipal</b></td></tr>
+   <tr><td align="left">PanelArchivos, PanelDisco, PanelColaDisco,<br align="left"/>PanelTablaAsignacion, PanelComputador<br align="left"/></td></tr>
+   <tr><td align="left">- refrescar() cada 100 ms<br align="left"/></td></tr></table>>];
+
+  Enums [label=<<table border="1" cellborder="0" cellspacing="0" cellpadding="3" bgcolor="#EAF3DE">
+   <tr><td><b>«enumeration»</b></td></tr>
+   <tr><td align="left">EstadoProceso: NUEVO, LISTO, EJECUCION, BLOQUEADO,<br align="left"/>   LISTO_SUSPENDIDO, BLOQUEADO_SUSPENDIDO, TERMINADO<br align="left"/>TipoOperacionES: CREAR, LEER, ACTUALIZAR, ELIMINAR,<br align="left"/>   SUSPENDER, REACTIVAR<br align="left"/>TipoPoliticaDisco: FIFO, SSTF, SCAN, C_SCAN, LOOK, C_LOOK<br align="left"/>ModoUsuario: ADMINISTRADOR, USUARIO<br align="left"/>Permiso: PUBLICO, PRIVADO<br align="left"/>TransitoSwap: NINGUNO, SALIENDO, ENTRANDO<br align="left"/>UsoBloque: LIBRE, ARCHIVO, INTERCAMBIO<br align="left"/>DireccionCabezal: ASCENDENTE, DESCENDENTE<br align="left"/>MotivoBloqueo, TipoNodo<br align="left"/></td></tr></table>>];
+
+  Gui -> Cluster [label="usa", style=dashed, arrowhead=vee];
+  Cluster -> Reloj [arrowhead=none, arrowtail=diamond, dir=both];
+  Cluster -> Comp [arrowhead=none, arrowtail=diamond, dir=both];
+  Cluster -> FS [arrowhead=vee];
+  Cluster -> Plan [arrowhead=vee];
+  Comp -> SO [arrowhead=none, arrowtail=diamond, dir=both];
+  Comp -> Disco [label="instala", arrowhead=vee];
+  Comp -> IReloj [style=dashed, arrowhead=empty];
+  Disco -> IReloj [style=dashed, arrowhead=empty];
+  SO -> IReloj [style=dashed, arrowhead=empty];
+  SO -> IOyente [style=dashed, arrowhead=empty];
+  SO -> PCB [label="0..*", arrowhead=vee];
+  SO -> FS [arrowhead=vee];
+  FS -> Nodo [arrowhead=none, arrowtail=diamond, dir=both, label="raiz"];
+  FS -> Disco [arrowhead=vee];
+  Disco -> Bloque [arrowhead=none, arrowtail=diamond, dir=both, label="1..*"];
+  Disco -> ICtrl [arrowhead=vee, label="controlador"];
+  Plan -> ICtrl [style=dashed, arrowhead=empty];
+  Plan -> IPol [arrowhead=vee];
+  Plan -> Sol [label="cola", arrowhead=vee];
+  Plan -> IOyente [arrowhead=vee, label="avisa"];
+  Pols -> IPol [style=dashed, arrowhead=empty];
+  Fab -> IPol [style=dashed, arrowhead=vee, xlabel="crea"];
+  Plan -> Fab [style=dashed, arrowhead=vee];
+  Sol -> PCB [arrowhead=vee];
+  {rank=same; IPol; Fab}
+}
