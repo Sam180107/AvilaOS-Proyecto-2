@@ -4,10 +4,9 @@ import unimet.avilaos.hardware.disco.TipoOperacionES;
 import unimet.avilaos.sincronizacion.BufferAcotado;
 import unimet.avilaos.so.archivos.ModoUsuario;
 
-
 /**
  * Ficha de un proceso: id, estado, prioridad, deadline, memoria, PC, MAR y
- * los datos extra para E/S y productor-consumidor.
+ * los datos extra para E/S, productor-consumidor y area de intercambio (Swap).
  */
 public class PCB {
 
@@ -34,6 +33,10 @@ public class PCB {
     private long ciclosEnListo = 0;
     private long ciclosEnEjecucion = 0;
     private long ciclosBloqueado = 0;
+    private long ciclosEnListoSuspendido = 0;
+    private long ciclosEnBloqueadoSuspendido = 0;
+
+    private int bloqueSwap = -1;
 
     private int mar = 0;
     private int ciclosEnCpu = 0;
@@ -65,7 +68,7 @@ public class PCB {
     private boolean solicitudHecha = false;
 
     public PCB(long id, String nombre, int idComputador, TipoProceso tipo, int prioridad,
-            int memoria, int instrucciones, int deadline, long cicloCreacion) {
+               int memoria, int instrucciones, int deadline, long cicloCreacion) {
         if (nombre == null || nombre.trim().isEmpty()) {
             throw new IllegalArgumentException("El nombre no puede estar vacio");
         }
@@ -100,7 +103,7 @@ public class PCB {
         this.deadlineRestante = deadline;
     }
 
-    /** Cambia de estado. Si el cambio no tiene sentido (por ejemplo, de Nuevo a Bloqueado) lanza una excepcion. */
+    /** Cambia de estado. Si el cambio no tiene sentido lanza una excepcion. */
     public void cambiarEstado(EstadoProceso destino, long ciclo) {
         if (destino == EstadoProceso.BLOQUEADO) {
             throw new IllegalArgumentException("Para bloquear use bloquear(motivo, ciclo)");
@@ -132,7 +135,8 @@ public class PCB {
         if (destino == EstadoProceso.TERMINADO) {
             cicloFinalizacion = ciclo;
         }
-        if (estado == EstadoProceso.BLOQUEADO) {
+        if ((estado == EstadoProceso.BLOQUEADO || estado == EstadoProceso.BLOQUEADO_SUSPENDIDO)
+                && destino != EstadoProceso.BLOQUEADO && destino != EstadoProceso.BLOQUEADO_SUSPENDIDO) {
             motivoBloqueo = MotivoBloqueo.NINGUNO;
         }
         estado = destino;
@@ -151,10 +155,7 @@ public class PCB {
         }
     }
 
-    /**
-     * Resta un ciclo al deadline.
-     * @return true si ya se vencio
-     */
+    /** Resta un ciclo al deadline. @return true si ya se vencio */
     public boolean descontarDeadline() {
         if (deadlineRestante > 0) {
             deadlineRestante--;
@@ -168,8 +169,14 @@ public class PCB {
             case LISTO -> ciclosEnListo++;
             case EJECUCION -> ciclosEnEjecucion++;
             case BLOQUEADO -> ciclosBloqueado++;
+            case LISTO_SUSPENDIDO -> ciclosEnListoSuspendido++;
+            case BLOQUEADO_SUSPENDIDO -> ciclosEnBloqueadoSuspendido++;
             case TERMINADO -> { }
         }
+    }
+
+    public boolean estaSuspendido() {
+        return estado == EstadoProceso.LISTO_SUSPENDIDO || estado == EstadoProceso.BLOQUEADO_SUSPENDIDO;
     }
 
     public boolean haTerminadoTrabajo() {
@@ -188,7 +195,6 @@ public class PCB {
         return cicloFinalizacion < 0 ? -1 : cicloFinalizacion - cicloCreacion;
     }
 
-    /** I/O bound: cada cuantas instrucciones pide E/S y cuantos ciclos tarda. */
     public void configurarES(int cada, int duracion) {
         if (tipo != TipoProceso.IO_BOUND) {
             throw new IllegalStateException("Solo los I/O bound hacen E/S");
@@ -200,7 +206,6 @@ public class PCB {
         this.duracionES = duracion;
     }
 
-    /** Productor/consumidor: buffer, cada cuantos ciclos produce/consume y cuantos elementos necesita. */
     public void configurarBuffer(BufferAcotado buffer, int cadaCuantos, int elementos) {
         if (!tipo.usaBuffer()) {
             throw new IllegalStateException("Solo productores y consumidores usan buffer");
@@ -215,13 +220,8 @@ public class PCB {
                 ? FaseProductorConsumidor.PRODUCIR : FaseProductorConsumidor.ACCESO_RED;
     }
 
-    /**
-     * Proceso de E/S de archivo: que operacion hace, sobre que ruta y a nombre de quien.
-     * @param tamanoBloques solo para CREAR (0 crea un directorio)
-     * @param nuevoNombre   solo para ACTUALIZAR; null si no se renombra
-     */
     public void configurarArchivo(TipoOperacionES operacion, String ruta, int tamanoBloques,
-            String nuevoNombre, String usuario, ModoUsuario modo) {
+                                  String nuevoNombre, String usuario, ModoUsuario modo) {
         if (tipo != TipoProceso.ES_ARCHIVO) {
             throw new IllegalStateException("Solo los procesos de E/S de archivo trabajan sobre el disco");
         }
@@ -245,10 +245,6 @@ public class PCB {
         this.modoUsuario = modo;
     }
 
-    /**
-     * Un productor/consumidor solo termina en un punto seguro: fuera de la
-     * region critica y sin huecos reservados.
-     */
     public boolean puedeTerminar() {
         if (!tipo.usaBuffer()) {
             return haTerminadoTrabajo();
@@ -267,6 +263,9 @@ public class PCB {
     public void reiniciarCiclosEnCpu() { ciclosEnCpu = 0; }
     public void sumarElemento() { elementosHechos++; }
     public void sumarCiclosEnSemaforos(long c) { ciclosEnSemaforos += c; }
+
+    public int getBloqueSwap() { return bloqueSwap; }
+    public void setBloqueSwap(int bloqueSwap) { this.bloqueSwap = bloqueSwap; }
 
     public int getMar() { return mar; }
     public int getCiclosEnCpu() { return ciclosEnCpu; }
@@ -296,7 +295,6 @@ public class PCB {
     public String getNuevoNombre() { return nuevoNombre; }
     public String getUsuario() { return usuario; }
     public ModoUsuario getModoUsuario() { return modoUsuario; }
-    /** true cuando el proceso ya le pidio su operacion al disco. */
     public boolean solicitudHecha() { return solicitudHecha; }
     public void marcarSolicitudHecha() { solicitudHecha = true; }
 
@@ -323,6 +321,8 @@ public class PCB {
     public long getCiclosEnListo() { return ciclosEnListo; }
     public long getCiclosEnEjecucion() { return ciclosEnEjecucion; }
     public long getCiclosBloqueado() { return ciclosBloqueado; }
+    public long getCiclosEnListoSuspendido() { return ciclosEnListoSuspendido; }
+    public long getCiclosEnBloqueadoSuspendido() { return ciclosEnBloqueadoSuspendido; }
 
     @Override
     public String toString() {

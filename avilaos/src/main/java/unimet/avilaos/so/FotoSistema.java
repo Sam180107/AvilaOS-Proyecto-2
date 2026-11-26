@@ -24,11 +24,13 @@ public class FotoSistema {
     public Object[][] nuevos;
     public Object[][] listos;
     public Object[][] bloqueados;
+    public Object[][] listosSuspendidos;
+    public Object[][] bloqueadosSuspendidos;
     public Object[][] terminados;
 
     public static Object[] fila(PCB p) {
         String extra;
-        if (p.getEstado() == EstadoProceso.BLOQUEADO) {
+        if (p.getEstado() == EstadoProceso.BLOQUEADO || p.getEstado() == EstadoProceso.BLOQUEADO_SUSPENDIDO) {
             extra = p.getMotivoBloqueo().getEtiqueta();
         } else if (p.getOperacionES() != null) {
             extra = p.getOperacionES().getEtiqueta() + " " + p.getRutaArchivo();
