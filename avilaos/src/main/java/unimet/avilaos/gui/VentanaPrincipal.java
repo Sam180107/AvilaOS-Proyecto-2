@@ -4,6 +4,7 @@ import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.io.File;
+import java.io.IOException;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
@@ -28,6 +29,7 @@ import unimet.avilaos.hardware.Computador;
 import unimet.avilaos.json.ArchivoSistemaArchivos;
 import unimet.avilaos.json.ErrorJson;
 import unimet.avilaos.metricas.Estadisticas;
+import unimet.avilaos.metricas.ExportadorReportes;
 import unimet.avilaos.so.archivos.EntradaArchivo;
 import unimet.avilaos.so.archivos.ModoUsuario;
 import unimet.avilaos.so.archivos.SistemaArchivos;
@@ -44,6 +46,7 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
     private final PanelTablaAsignacion tablaAsignacion;
     private final PanelDisco panelDisco;
     private final PanelColaDisco panelCola;
+    private final PanelCacheDisco panelCache;
     private final GraficaDesplazamiento graficaDesplazamiento;
     private final GraficaUtilizacion graficaUso;
 
@@ -53,54 +56,56 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
     private final JComboBox<String> usuario = new JComboBox<>();
     private final ModeloTablaSoloLectura tablaMetricas = new ModeloTablaSoloLectura(new String[] {
         "Computador", "Throughput (proc/ciclo)", "Uso de CPU", "T. respuesta prom.",
-        "Cumplen deadline", "Completados", "Vencidos"
+        "Cumplen deadline", "Equidad (Jain)", "Completados", "Vencidos"
     });
     private final JTextArea log = new JTextArea();
     private final Timer refresco = new Timer(100, e -> refrescar());
     private long versionUsuarios = -1;
 
     public VentanaPrincipal(Cluster cluster) {
-        super("AvilaOS - Proyecto 2: disco, sistema de archivos y planificacion de E/S");
+        super("AvilaOS - Proyecto 2: disco, sistema de archivos, cache LRU y planificacion de E/S");
         this.cluster = cluster;
 
-        // ---- barra de arriba
-        JPanel barra = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        JPanel barra = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
         iniciarPausar.addActionListener(e -> iniciarOPausar());
         JButton paso = new JButton("Paso");
         paso.addActionListener(e -> new Thread(() -> cluster.getReloj().paso()).start());
         JSpinner ms = DialogoProceso.numero(cluster.getReloj().getDuracionCiclo(), 1, 10_000);
         ms.addChangeListener(e -> cluster.getReloj().setDuracionCiclo((Integer) ms.getValue()));
         modo.addActionListener(e -> aplicarModo());
-        JButton nueva = new JButton("Nueva operacion de archivo...");
+        JButton nueva = new JButton("Nueva operacion...");
         nueva.addActionListener(e -> new DialogoOperacionArchivo(this, cluster, this,
                 DialogoOperacionArchivo.Accion.LEER, "/").setVisible(true));
-        JButton guardar = new JButton("Guardar sistema de archivos...");
+        JButton guardar = new JButton("Guardar FS...");
         guardar.addActionListener(e -> guardar());
+        JButton reporte = new JButton("Exportar reporte...");
+        reporte.addActionListener(e -> exportarReporte());
         JButton reiniciar = new JButton("Reiniciar");
         reiniciar.addActionListener(e -> reiniciar());
 
-        ciclo.setFont(ciclo.getFont().deriveFont(16f));
+        ciclo.setFont(ciclo.getFont().deriveFont(15f));
         barra.add(iniciarPausar);
         barra.add(paso);
         barra.add(ciclo);
-        barra.add(new JLabel("  Ciclo (ms):"));
+        barra.add(new JLabel(" Ciclo(ms):"));
         barra.add(ms);
-        barra.add(new JLabel("  Modo:"));
+        barra.add(new JLabel(" Modo:"));
         barra.add(modo);
         barra.add(new JLabel("Usuario:"));
         barra.add(usuario);
         barra.add(nueva);
         barra.add(guardar);
+        barra.add(reporte);
         barra.add(reiniciar);
         barra.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
 
-        // ---- paneles
         Computador comp = cluster.getComputadores()[0];
         panelComputador = new PanelComputador(comp);
         panelArchivos = new PanelArchivos(cluster, this);
         tablaAsignacion = new PanelTablaAsignacion(cluster);
         panelDisco = new PanelDisco(cluster);
         panelCola = new PanelColaDisco(cluster);
+        panelCache = new PanelCacheDisco(cluster);
         graficaDesplazamiento = new GraficaDesplazamiento(cluster);
         graficaUso = new GraficaUtilizacion(cluster.getComputadores());
         log.setEditable(false);
@@ -108,6 +113,7 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
         JTabbedPane abajo = new JTabbedPane();
         abajo.addTab("Cola de E/S del disco", panelCola);
         abajo.addTab("Tabla de asignacion", tablaAsignacion);
+        abajo.addTab("Cache LRU (RAM)", panelCache);
         abajo.addTab("Computador y colas", panelComputador);
         abajo.addTab("Metricas", new JScrollPane(new JTable(tablaMetricas)));
         abajo.addTab("Desplazamiento del cabezal", graficaDesplazamiento);
@@ -125,7 +131,7 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
         add(barra, BorderLayout.NORTH);
         add(division, BorderLayout.CENTER);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setSize(1400, 900);
+        setSize(1440, 900);
         setLocationRelativeTo(null);
 
         refrescarUsuarios();
@@ -133,7 +139,6 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
         refresco.start();
     }
 
-    /** Pide los dos JSON y abre la ventana principal. Si cancelan, se cierra el programa. */
     public static void abrir() {
         Cluster cluster = new VentanaCarga().mostrar();
         if (cluster == null) {
@@ -141,8 +146,6 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
         }
         new VentanaPrincipal(cluster).setVisible(true);
     }
-
-    // ---------- ContextoUsuario ----------
 
     @Override
     public ModoUsuario modo() {
@@ -158,7 +161,6 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
         return u == null ? "user1" : u.toString();
     }
 
-    /** El modo usuario deja leer lo propio o publico y operar sobre lo propio; las politicas son del administrador. */
     private void aplicarModo() {
         boolean admin = modo() == ModoUsuario.ADMINISTRADOR;
         usuario.setEnabled(!admin);
@@ -168,7 +170,6 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
                 + (admin ? "" : " (usuario " + usuario() + ")"));
     }
 
-    /** Los usuarios disponibles son los duenos que aparecen en el sistema de archivos. */
     private void refrescarUsuarios() {
         SistemaArchivos fs = cluster.getSistemaArchivos();
         if (fs == null || fs.getVersion() == versionUsuarios) {
@@ -194,9 +195,6 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
         }
     }
 
-    // ---------- acciones ----------
-
-    /** Para esta simulacion y vuelve a la ventana de carga. */
     private void reiniciar() {
         int r = JOptionPane.showConfirmDialog(this,
                 "Se pierde la simulacion actual (guarde antes el sistema de archivos si quiere conservarlo).\nReiniciar?",
@@ -218,7 +216,6 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
         }
     }
 
-    /** Guarda el estado del sistema de archivos en un JSON que se puede volver a cargar. */
     private void guardar() {
         JFileChooser fc = new JFileChooser(new File("datos").isDirectory() ? new File("datos") : null);
         fc.setFileFilter(new FileNameExtensionFilter("Archivos JSON", "json"));
@@ -239,7 +236,28 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
         }
     }
 
-    // ---------- repintado ----------
+    private void exportarReporte() {
+        JFileChooser fc = new JFileChooser(new File("datos").isDirectory() ? new File("datos") : null);
+        fc.addChoosableFileFilter(new FileNameExtensionFilter("Reporte CSV (*.csv)", "csv"));
+        fc.addChoosableFileFilter(new FileNameExtensionFilter("Reporte de Texto (*.txt)", "txt"));
+        fc.setSelectedFile(new File("reporte_avilaos.csv"));
+        if (fc.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        File destino = fc.getSelectedFile();
+        String nombre = destino.getName().toLowerCase();
+        if (!nombre.endsWith(".csv") && !nombre.endsWith(".txt")) {
+            destino = new File(destino.getPath() + ".csv");
+        }
+        try {
+            ExportadorReportes.exportar(cluster, destino);
+            cluster.getLog().registrar("Reporte de metricas exportado en " + destino.getName());
+            JOptionPane.showMessageDialog(this, "Reporte exportado correctamente en:\n" + destino.getAbsolutePath());
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(this, "No se pudo exportar: " + ex.getMessage(),
+                    "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
 
     private void refrescar() {
         ciclo.setText("Ciclo: " + cluster.getReloj().getCiclo());
@@ -250,6 +268,7 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
         tablaAsignacion.refrescar();
         panelDisco.refrescar();
         panelCola.refrescar();
+        panelCache.refrescar();
         refrescarMetricas();
         graficaDesplazamiento.repaint();
         graficaUso.repaint();
@@ -277,7 +296,9 @@ public class VentanaPrincipal extends JFrame implements ContextoUsuario {
             pct((double) c.getCpu().getCiclosOcupada() / total),
             num(e.getRespuestaPromedio()),
             pct(e.getCumplimientoDeadlines()),
-            e.getCompletados(), e.getVencidos()
+            num(e.getEquidad()),
+            e.getCompletados(),
+            e.getVencidos()
         }});
     }
 
