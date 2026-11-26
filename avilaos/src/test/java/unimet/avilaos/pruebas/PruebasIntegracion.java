@@ -1,5 +1,7 @@
 package unimet.avilaos.pruebas;
 
+import unimet.avilaos.so.archivos.Permiso;
+
 import java.io.File;
 import unimet.avilaos.cluster.Cluster;
 import unimet.avilaos.cluster.ConfiguracionProcesos;
@@ -45,6 +47,9 @@ public final class PruebasIntegracion {
         deadlineEnLaCola();
         jsonDeProcesosInvalido();
         continuidadProyecto1();
+        suspensionPorElDisco();
+        scanHastaElFinalDeArchivos();
+        permisosYDuenosConProcesos();
         System.out.println();
         System.out.println(fallas == 0 ? "TODO BIEN: " + total + " verificaciones"
                 : fallas + " de " + total + " verificaciones fallaron");
@@ -270,6 +275,132 @@ public final class PruebasIntegracion {
             motivo = e.getMessage();
         }
         anotar(nombre + " -> " + motivo, motivo != null);
+    }
+
+    /** Los JSON del enunciado pero con poca RAM, para obligar al planificador a mediano plazo. */
+    private static Cluster armarConPocaRam(int ram) {
+        try {
+            String texto = java.nio.file.Files.readString(new File(carpeta, "procesos.json").toPath())
+                    .replace("\"ramCapacity\": 1024", "\"ramCapacity\": " + ram)
+                    .replace("\"deadline\": 500", "\"deadline\": 50000");
+            SistemaArchivos fs = ArchivoSistemaArchivos.cargar(new File(carpeta, "sistema_archivos.json"), 0, 1);
+            return Cluster.crear(ArchivoProcesos.desdeTexto(texto), fs);
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void suspensionPorElDisco() {
+        System.out.println("== Suspension y reactivacion pasan por la cola del disco ==");
+        Cluster c = armarConPocaRam(40);
+        SistemaOperativo os = c.getComputadores()[0].getOs();
+        verificar("solo caben 2 al principio", 32L, c.getComputadores()[0].getRam().getUsada());
+        verificar("los otros esperan como Nuevos", 6L, os.foto().nuevos.length);
+        StringBuilder log = new StringBuilder();
+        boolean vioListoSuspendido = false;
+        boolean vioBloqueadoSuspendido = false;
+        boolean ramSeRespeta = true;
+        for (int i = 0; i < 60000 && os.foto().terminados.length < 8; i++) {
+            c.getReloj().paso();
+            Recorrido<String> r = c.getLog().vaciar().recorrido();
+            while (r.haySiguiente()) {
+                log.append(r.siguiente()).append('\n');
+            }
+            vioListoSuspendido |= os.foto().listosSuspendidos.length > 0;
+            vioBloqueadoSuspendido |= os.foto().bloqueadosSuspendidos.length > 0;
+            ramSeRespeta &= c.getComputadores()[0].getRam().getUsada() <= 40;
+        }
+        String l = log.toString();
+        verificar("terminan los 8 sin vencer", 8L, os.getEstadisticas().getCompletados());
+        anotar("hubo suspensiones (" + os.getSuspensiones() + ")", os.getSuspensiones() > 0);
+        anotar("hubo reactivaciones (" + os.getReactivaciones() + ")", os.getReactivaciones() > 0);
+        verificar("todo lo suspendido se reactivo", os.getSuspensiones(), os.getReactivaciones());
+        verificar("se suspende para admitir", "true", String.valueOf(l.contains("Se suspende al proceso")
+                && l.contains("para admitir a")));
+        verificar("SUSPENDER entra a la cola del disco", "true", String.valueOf(l.contains("encola Suspender sobre swap/")));
+        verificar("REACTIVAR entra a la cola del disco", "true", String.valueOf(l.contains("encola Reactivar sobre swap/")));
+        verificar("el disco atiende el swap", "true", String.valueOf(l.contains("El disco termino Suspender")
+                && l.contains("El disco termino Reactivar")));
+        anotar("se vio la cola Listo/Suspendido", vioListoSuspendido);
+        anotar("se vio la cola Bloqueado/Suspendido", vioBloqueadoSuspendido);
+        anotar("nunca se paso de la RAM", ramSeRespeta);
+        verificar("RAM devuelta", 0L, c.getComputadores()[0].getRam().getUsada());
+        verificar("swap vacio al final", 100L, c.getDisco().swapLibre());
+        long atendidas = c.getPlanificadorDisco().getMetricas().getTotalAtendidas();
+        verificar("solicitudes = 8 de archivos + suspensiones + reactivaciones",
+                8 + os.getSuspensiones() + os.getReactivaciones(), atendidas);
+    }
+
+    /** Casos P2 a P4: se detiene el disco hasta que las 8 solicitudes esten en la cola. */
+    private static String conColaLlena(TipoPoliticaDisco politica) {
+        Cluster c = armar(politica);
+        c.detenerDisco(true);
+        for (int i = 0; i < 200 && c.getPlanificadorDisco().pendientes() < 8; i++) {
+            c.getReloj().paso();
+        }
+        verificar(politica.getEtiqueta() + ": las 8 solicitudes esperan en la cola", 8L,
+                c.getPlanificadorDisco().pendientes());
+        verificar("el cabezal no se movio", 50L, c.getDisco().getCabezal());
+        c.detenerDisco(false);
+        return correr(c, 8);
+    }
+
+    private static void scanHastaElFinalDeArchivos() {
+        System.out.println("== Casos P2 a P4 en la simulacion completa (disco detenido hasta llenar la cola) ==");
+        String log = conColaLlena(TipoPoliticaDisco.SSTF);
+        verificar("SSTF: orden del caso P2", "62 64 34 11 95 119 123 180", ordenDeAtencion(log));
+        log = conColaLlena(TipoPoliticaDisco.SCAN);
+        verificar("SCAN: orden del caso P3", "62 64 95 119 123 180 34 11", ordenDeAtencion(log));
+        verificar("SCAN llega al 199 y regresa (no entra al swap)", "true",
+                String.valueOf(log.contains("El cabezal va al bloque 199 (SCAN)")));
+        log = conColaLlena(TipoPoliticaDisco.C_SCAN);
+        verificar("C-SCAN: orden del caso P4", "62 64 95 119 123 180 11 34", ordenDeAtencion(log));
+        verificar("C-SCAN va al 199 y salta al 0", "true",
+                String.valueOf(log.contains("El cabezal va al bloque 199 y salta al 0")));
+    }
+
+    private static void permisosYDuenosConProcesos() {
+        System.out.println("== Permisos y duenos tambien con procesos de E/S ==");
+        Cluster c = armar(null);
+        correr(c, 8);
+        ModoUsuario adm = ModoUsuario.ADMINISTRADOR;
+        ModoUsuario usr = ModoUsuario.USUARIO;
+        c.crearProcesoES(new EspecificacionES("dir user1", 16, 0, 500, 2, TipoOperacionES.CREAR,
+                "/usuarios/user1", 0, null, "admin", adm, Permiso.PRIVADO, "user1"));
+        correr(c, 9);
+        verificar("el admin crea un directorio de user1", "user1",
+                c.getSistemaArchivos().buscar("/usuarios/user1").getDueno());
+        c.crearProcesoES(new EspecificacionES("archivo user1", 16, 0, 500, 2, TipoOperacionES.CREAR,
+                "/usuarios/user1/tarea.txt", 2, null, "user1", usr, Permiso.PUBLICO, null));
+        correr(c, 10);
+        verificar("user1 crea dentro de lo suyo", "user1",
+                c.getSistemaArchivos().buscar("/usuarios/user1/tarea.txt").getDueno());
+        verificar("con el permiso que eligio", Permiso.PUBLICO.name(),
+                c.getSistemaArchivos().buscar("/usuarios/user1/tarea.txt").getPermiso().name());
+        String motivo = null;
+        try {
+            c.crearProcesoES(new EspecificacionES("dir", 16, 0, 500, 2, TipoOperacionES.CREAR,
+                    "/usuarios/user1/sub", 0, null, "user1", usr));
+        } catch (OperacionRechazada e) {
+            motivo = e.getMessage();
+        }
+        anotar("modo usuario no crea directorios -> " + motivo, motivo != null);
+        c.crearProcesoES(new EspecificacionES("permiso", 16, 0, 500, 2, TipoOperacionES.ACTUALIZAR,
+                "/usuarios/user1/tarea.txt", 0, null, "user1", usr, Permiso.PRIVADO, null));
+        verificar("el permiso no cambia hasta que el disco atiende", Permiso.PUBLICO.name(),
+                c.getSistemaArchivos().buscar("/usuarios/user1/tarea.txt").getPermiso().name());
+        String log = correr(c, 11);
+        verificar("cambio de permiso hecho por el proceso", Permiso.PRIVADO.name(),
+                c.getSistemaArchivos().buscar("/usuarios/user1/tarea.txt").getPermiso().name());
+        verificar("queda en el log", "true", String.valueOf(log.contains("Permiso de /usuarios/user1/tarea.txt cambiado a")));
+        motivo = null;
+        try {
+            c.crearProcesoES(new EspecificacionES("ajeno", 16, 0, 500, 2, TipoOperacionES.ACTUALIZAR,
+                    "/usuarios/data.csv", 0, null, "user1", usr, Permiso.PRIVADO, null));
+        } catch (OperacionRechazada e) {
+            motivo = e.getMessage();
+        }
+        anotar("no cambia permisos ajenos -> " + motivo, motivo != null);
     }
 
     private static void verificar(String nombre, String esperado, String obtenido) {
