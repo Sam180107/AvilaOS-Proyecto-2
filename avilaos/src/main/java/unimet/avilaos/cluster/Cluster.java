@@ -12,6 +12,7 @@ import unimet.avilaos.sincronizacion.Mutex;
 import unimet.avilaos.so.ParametrosSimulacion;
 import unimet.avilaos.so.RegistroEventos;
 import unimet.avilaos.so.archivos.ModoUsuario;
+import unimet.avilaos.so.archivos.OperacionRechazada;
 import unimet.avilaos.so.archivos.SistemaArchivos;
 import unimet.avilaos.so.disco.PlanificadorDisco;
 import unimet.avilaos.so.disco.TipoPoliticaDisco;
@@ -87,13 +88,15 @@ public class Cluster implements EnrutadorDespertar {
         PlanificadorDisco planificador = new PlanificadorDisco(politica, log);
         Disco disco = archivos.getDisco();
         disco.setControlador(planificador);
+        planificador.setUltimoBloqueArchivos(disco.getTotalBloques() - 1);
         computadores[0].getOs().conectarDisco(planificador, archivos);
         computadores[0].instalarDisco(disco);
         this.planificadorDisco = planificador;
         this.archivos = archivos;
-        log.registrar("Disco de " + disco.getTotalBloques() + " bloques, " + disco.getTamanoSwap()
-                + " de intercambio y cache LRU (" + archivos.getCache().getCapacidad()
-                + " bloques) conectado al Computador 1 (" + politica.getEtiqueta() + ")");
+        int cache = archivos.getCache().getCapacidad();
+        log.registrar("Disco de " + disco.getTotalBloques() + " bloques y " + disco.getTamanoSwap()
+                + " de intercambio conectado al Computador 1 (" + politica.getEtiqueta() + ")"
+                + (cache > 0 ? ", con cache LRU de " + cache + " bloques" : ""));
     }
 
     public PCB crearProcesoES(EspecificacionES e) {
@@ -102,13 +105,22 @@ public class Cluster implements EnrutadorDespertar {
             throw new IllegalArgumentException("Primero hay que cargar el sistema de archivos");
         }
         if (e.modo() == ModoUsuario.USUARIO) {
-            fs.validarPermiso(e.operacion(), e.ruta(), e.usuario(), e.modo());
+            fs.validarPermiso(e.operacion(), e.ruta(), e.usuario(), e.modo(), e.tamanoBloques());
+            if (e.dueno() != null && !e.dueno().equals(e.usuario())) {
+                throw new OperacionRechazada("Modo usuario: solo el administrador puede crear a nombre de otro usuario");
+            }
         }
         Computador destino = computadores[0];
+        if (e.memoria() < 1 || e.memoria() > destino.getRam().getCapacidad()) {
+            throw new IllegalArgumentException("La memoria del proceso debe estar entre 1 y "
+                    + destino.getRam().getCapacidad() + " (vino " + e.memoria() + ")");
+        }
         PCB pcb = new PCB(ids.siguiente(), e.nombre(), destino.getId(), TipoProceso.ES_ARCHIVO,
                 e.prioridad(), e.memoria(), e.instrucciones(), e.deadline(), reloj.getCiclo());
         pcb.configurarArchivo(e.operacion(), e.ruta(), e.tamanoBloques(), e.nuevoNombre(),
                 e.usuario(), e.modo());
+        pcb.setNuevoPermiso(e.permiso());
+        pcb.setDuenoNuevo(e.dueno());
         destino.getOs().admitirProceso(pcb);
         return pcb;
     }
@@ -117,6 +129,16 @@ public class Cluster implements EnrutadorDespertar {
         PlanificadorDisco p = planificadorDisco;
         if (p != null && p.getTipoPolitica() != politica) {
             p.cambiarPolitica(politica);
+        }
+    }
+
+    public void detenerDisco(boolean detener) {
+        Disco d = getDisco();
+        if (d != null && d.estaDetenido() != detener) {
+            d.setDetenido(detener);
+            log.registrar(detener ? "Disco detenido: las solicitudes se acumulan en la cola de E/S"
+                    : "Disco reanudado con " + planificadorDisco.pendientes() + " solicitudes en la cola ("
+                    + planificadorDisco.getTipoPolitica().getEtiqueta() + ")");
         }
     }
 

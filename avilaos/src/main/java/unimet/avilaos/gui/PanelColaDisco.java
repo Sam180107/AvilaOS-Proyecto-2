@@ -11,6 +11,7 @@ import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
+import javax.swing.JToggleButton;
 import unimet.avilaos.cluster.Cluster;
 import unimet.avilaos.estructuras.ListaEnlazada;
 import unimet.avilaos.estructuras.Recorrido;
@@ -33,6 +34,7 @@ public class PanelColaDisco extends JPanel {
     private final Cluster cluster;
     private final JComboBox<TipoPoliticaDisco> politica = new JComboBox<>(TipoPoliticaDisco.values());
     private final JLabel atendiendo = new JLabel(" ");
+    private final JToggleButton detener = new JToggleButton("Detener disco");
     private final JLabel desplazamiento = new JLabel(" ");
     private final JLabel porPolitica = new JLabel(" ");
     private final ModeloTablaSoloLectura tabla = new ModeloTablaSoloLectura(COLUMNAS);
@@ -59,6 +61,9 @@ public class PanelColaDisco extends JPanel {
         JPanel arriba = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         arriba.add(new JLabel("Politica de disco:"));
         arriba.add(politica);
+        detener.setToolTipText("Deja que se llene la cola de E/S y al reanudar el disco la ordena con la politica activa");
+        detener.addActionListener(e -> cluster.detenerDisco(detener.isSelected()));
+        arriba.add(detener);
         arriba.add(atendiendo);
 
         JPanel metricas = new JPanel(new GridLayout(0, 1, 0, 1));
@@ -73,6 +78,7 @@ public class PanelColaDisco extends JPanel {
     /** Solo el administrador puede cambiar la politica de planificacion. */
     public void setEditable(boolean puedeCambiar) {
         politica.setEnabled(puedeCambiar);
+        detener.setEnabled(puedeCambiar);
     }
 
     public void refrescar() {
@@ -87,8 +93,11 @@ public class PanelColaDisco extends JPanel {
             politica.setSelectedItem(tipo);
             refrescando = false;
         }
+        detener.setSelected(disco.estaDetenido());
+        detener.setText(disco.estaDetenido() ? "Reanudar disco" : "Detener disco");
         SolicitudES actual = disco.getSolicitudActual();
-        atendiendo.setText(actual == null ? "   Disco ocioso" : "   Atendiendo: " + actual);
+        atendiendo.setText(disco.estaDetenido() ? "   Disco detenido"
+                : actual == null ? "   Disco ocioso" : "   Atendiendo: " + actual);
 
         long ciclo = cluster.getReloj().getCiclo();
         ListaEnlazada<SolicitudES> cola = plan.copiaCola();
