@@ -32,6 +32,7 @@ public class Disco implements ComponenteDeReloj {
     private DecisionDisco viaje;
 
     private long desplazamientoTotal = 0;
+    private volatile boolean detenido = false;
     private final ListaEnlazada<long[]> historial = new ListaEnlazada<>();
 
     public Disco(int totalBloques, int tamanoSwap, int cabezalInicial, int posicionesPorCiclo) {
@@ -70,6 +71,11 @@ public class Disco implements ComponenteDeReloj {
         SolicitudES lista = null;
         mutex.cerrar();
         try {
+            if (detenido) {
+                // detenido a mano: las solicitudes se acumulan en la cola y el cabezal no se mueve
+                anotarHistorial(ciclo);
+                return;
+            }
             if (actual == null && viaje == null && controlador != null) {
                 DecisionDisco d = controlador.siguiente(cabezal, direccion, bloques.length - 1, ciclo);
                 if (d != null) {
@@ -326,6 +332,19 @@ public class Disco implements ComponenteDeReloj {
         } finally {
             mutex.abrir();
         }
+    }
+
+    /**
+     * Detiene o reanuda el disco sin parar el resto de la simulacion. Sirve
+     * para dejar que se llene la cola de E/S y ver como la ordena cada
+     * politica (los casos P1 a P4 del enunciado suponen la cola llena).
+     */
+    public void setDetenido(boolean detenido) {
+        this.detenido = detenido;
+    }
+
+    public boolean estaDetenido() {
+        return detenido;
     }
 
     public void setPosicionesPorCiclo(int posiciones) {

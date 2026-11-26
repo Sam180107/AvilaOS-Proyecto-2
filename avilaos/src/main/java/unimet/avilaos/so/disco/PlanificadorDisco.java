@@ -24,6 +24,7 @@ public class PlanificadorDisco implements ControladorDisco {
     private TipoPoliticaDisco tipo;
     private PoliticaDisco politica;
     private OyenteDisco oyente;
+    private int ultimoBloqueArchivos = -1;
 
     /** @param log puede ser null (en las pruebas). */
     public PlanificadorDisco(TipoPoliticaDisco tipo, RegistroEventos log) {
@@ -34,6 +35,15 @@ public class PlanificadorDisco implements ControladorDisco {
 
     public void setOyente(OyenteDisco oyente) {
         this.oyente = oyente;
+    }
+
+    /**
+     * Ultimo bloque del area de archivos. El swap va despues; mientras no
+     * haya solicitudes en el swap, SCAN y C-SCAN usan este bloque como
+     * extremo del disco (en el enunciado: llega al 199 y regresa).
+     */
+    public void setUltimoBloqueArchivos(int ultimo) {
+        this.ultimoBloqueArchivos = ultimo;
     }
 
     /** Una solicitud nueva entra a la cola de E/S. */
@@ -95,7 +105,7 @@ public class PlanificadorDisco implements ControladorDisco {
                 // no hay que mover el cabezal (p. ej. crear un directorio): sale de una vez
                 decision = DecisionDisco.atender(sinBloques);
             } else {
-                decision = politica.decidir(cola, cabezal, direccion, ultimoBloque);
+                decision = politica.decidir(cola, cabezal, direccion, extremoEfectivo(cabezal, ultimoBloque));
             }
             if (decision.esAtender()) {
                 SolicitudES s = decision.getSolicitud();
@@ -117,6 +127,19 @@ public class PlanificadorDisco implements ControladorDisco {
         }
         registrar(mensaje);
         return decision;
+    }
+
+    private int extremoEfectivo(int cabezal, int ultimoBloque) {
+        if (ultimoBloqueArchivos < 0 || ultimoBloqueArchivos >= ultimoBloque) {
+            return ultimoBloque;
+        }
+        Recorrido<SolicitudES> r = cola.recorrido();
+        while (r.haySiguiente()) {
+            if (r.siguiente().getBloqueObjetivo() > ultimoBloqueArchivos) {
+                return ultimoBloque; // hay algo en el swap: el barrido llega hasta el final
+            }
+        }
+        return Math.max(ultimoBloqueArchivos, cabezal);
     }
 
     private SolicitudES primeraSinBloques() {
