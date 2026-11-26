@@ -4,10 +4,16 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
+import java.awt.GridLayout;
 import java.awt.Insets;
 import java.io.File;
 import javax.swing.BorderFactory;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
+import javax.swing.JList;
+import javax.swing.JSpinner;
 import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
@@ -24,6 +30,8 @@ import unimet.avilaos.json.ArchivoProcesos;
 import unimet.avilaos.json.ArchivoSistemaArchivos;
 import unimet.avilaos.json.ErrorJson;
 import unimet.avilaos.so.archivos.SistemaArchivos;
+import unimet.avilaos.so.disco.TipoPoliticaDisco;
+import unimet.avilaos.so.planificacion.TipoPolitica;
 
 /**
  * Primera ventana: obliga a cargar los dos JSON (sistema de archivos y
@@ -46,6 +54,21 @@ public class VentanaCarga extends JDialog {
     private final JLabel estadoFs = new JLabel("Falta cargar el sistema de archivos");
     private final JLabel estadoProcesos = new JLabel("Falta cargar los procesos y la configuracion");
     private final JButton iniciar = new JButton("Iniciar AvilaOS");
+
+    // configuracion: sale de los JSON y se puede ajustar antes de iniciar
+    private final JSpinner duracion = DialogoProceso.numero(300, 1, 10_000);
+    private final JSpinner ram = DialogoProceso.numero(1024, 1, 1_000_000);
+    private final JComboBox<TipoPolitica> politicaCpu = new JComboBox<>(TipoPolitica.values());
+    private final JSpinner quantum = DialogoProceso.numero(4, 1, 1_000);
+    private final JSpinner bloques = DialogoProceso.numero(200, 100, 500);
+    private final JSpinner swap = DialogoProceso.numero(100, 0, 1_000);
+    private final JComboBox<TipoPoliticaDisco> politicaDisco = new JComboBox<>(TipoPoliticaDisco.values());
+    private final JSpinner cabezal = DialogoProceso.numero(50, 0, 1_499);
+    private final JSpinner velocidad = DialogoProceso.numero(4, 1, 500);
+    private final JCheckBox discoDetenido = new JCheckBox("Arrancar con el disco detenido (para ver los casos P2 a P4 con la cola llena)");
+    private final JPanel configuracion = new JPanel(new GridLayout(0, 2, 6, 3));
+    private File cargadoFs;
+    private File cargadoProcesos;
     private Cluster resultado;
 
     public VentanaCarga() {
@@ -60,6 +83,29 @@ public class VentanaCarga extends JDialog {
         fila(f, 0, "1. Sistema de archivos (JSON):", rutaFs, "Examinar...", () -> elegir(false), estadoFs);
         fila(f, 3, "2. Procesos y configuracion (JSON):", rutaProcesos, "Examinar...", () -> elegir(true), estadoProcesos);
 
+        politicaCpu.setRenderer(new DefaultListCellRenderer() {
+            @Override
+            public java.awt.Component getListCellRendererComponent(JList<?> l, Object v, int i,
+                    boolean sel, boolean foco) {
+                return super.getListCellRendererComponent(l, ((TipoPolitica) v).getEtiqueta(), i, sel, foco);
+            }
+        });
+        configuracion.setBorder(BorderFactory.createTitledBorder("3. Configuracion (sale de los JSON; se puede ajustar)"));
+        campo("Duracion del ciclo (ms):", duracion);
+        campo("RAM del computador:", ram);
+        campo("Politica de CPU:", politicaCpu);
+        campo("Quantum (Round Robin):", quantum);
+        campo("Bloques del disco (100 a 500):", bloques);
+        campo("Tamano del area de intercambio (bloques):", swap);
+        campo("Politica de disco inicial:", politicaDisco);
+        campo("Posicion inicial del cabezal:", cabezal);
+        campo("Posiciones del cabezal por ciclo:", velocidad);
+        configuracion.add(discoDetenido);
+        habilitarConfiguracion(false);
+        JPanel centro = new JPanel(new BorderLayout(4, 4));
+        centro.add(f, BorderLayout.NORTH);
+        centro.add(configuracion, BorderLayout.CENTER);
+
         JLabel nota = new JLabel("<html>Los dos archivos son obligatorios: el reloj no arranca sin ellos. "
                 + "Cargue los procesos primero si el disco depende del swap.</html>");
         iniciar.setEnabled(false);
@@ -72,13 +118,42 @@ public class VentanaCarga extends JDialog {
 
         setLayout(new BorderLayout(6, 6));
         add(nota, BorderLayout.NORTH);
-        add(f, BorderLayout.CENTER);
+        add(centro, BorderLayout.CENTER);
         add(botones, BorderLayout.SOUTH);
         ((JPanel) getContentPane()).setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
         pack();
         setMinimumSize(getSize());
         setLocationRelativeTo(null);
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+    }
+
+    private void campo(String titulo, java.awt.Component c) {
+        configuracion.add(new JLabel(titulo));
+        configuracion.add(c);
+    }
+
+    private void habilitarConfiguracion(boolean si) {
+        for (java.awt.Component c : configuracion.getComponents()) {
+            c.setEnabled(si);
+        }
+    }
+
+    /** Pone en los campos lo que dicen los JSON, solo cuando cambia alguno de los archivos. */
+    private void llenarConfiguracion(ConfiguracionProcesos cfg, SistemaArchivos fs) {
+        if (archivoFs == cargadoFs && archivoProcesos == cargadoProcesos) {
+            return;
+        }
+        cargadoFs = archivoFs;
+        cargadoProcesos = archivoProcesos;
+        duracion.setValue(Math.min(10_000, cfg.duracionCiclo));
+        ram.setValue(Math.min(1_000_000, cfg.ram));
+        politicaCpu.setSelectedItem(cfg.politica);
+        quantum.setValue(Math.min(1_000, cfg.quantum));
+        bloques.setValue(fs.getDisco().getTotalBloques());
+        swap.setValue(Math.min(1_000, cfg.tamanoSwap));
+        politicaDisco.setSelectedItem(cfg.politicaDisco);
+        cabezal.setValue(Math.min(1_499, fs.getDisco().getCabezal()));
+        velocidad.setValue(Math.min(500, cfg.posicionesPorCiclo));
     }
 
     private static void fila(JPanel p, int y, String titulo, JTextField campo, String texto,
@@ -143,12 +218,14 @@ public class VentanaCarga extends JDialog {
                     estado(estadoFs, VERDE, fs.getDisco().getTotalBloques() + " bloques, " + fs.listarArchivos().tamano()
                             + " archivos, cabezal en " + fs.getDisco().getCabezal());
                     avisarRutas(cfg, fs);
+                    llenarConfiguracion(cfg, fs);
                 } catch (ErrorJson | IllegalArgumentException e) {
                     estado(estadoFs, ROJO, e.getMessage());
                 }
             }
         }
         iniciar.setEnabled(procesosOk && fsOk);
+        habilitarConfiguracion(procesosOk && fsOk);
         pack();
     }
 
@@ -181,8 +258,26 @@ public class VentanaCarga extends JDialog {
         try {
             // se vuelve a leer todo para que el disco del sistema sea una copia limpia
             ConfiguracionProcesos cfg = ArchivoProcesos.cargar(archivoProcesos);
-            SistemaArchivos fs = ArchivoSistemaArchivos.cargar(archivoFs, cfg.tamanoSwap, cfg.posicionesPorCiclo);
+            cfg.duracionCiclo = DialogoProceso.valor(duracion);
+            cfg.ram = DialogoProceso.valor(ram);
+            cfg.politica = (TipoPolitica) politicaCpu.getSelectedItem();
+            cfg.quantum = DialogoProceso.valor(quantum);
+            cfg.tamanoSwap = DialogoProceso.valor(swap);
+            cfg.politicaDisco = (TipoPoliticaDisco) politicaDisco.getSelectedItem();
+            cfg.posicionesPorCiclo = DialogoProceso.valor(velocidad);
+            int total = DialogoProceso.valor(bloques);
+            int inicio = DialogoProceso.valor(cabezal);
+            if (inicio >= total) {
+                JOptionPane.showMessageDialog(this, "El cabezal debe empezar en un bloque de archivos: entre 0 y "
+                        + (total - 1) + ".", "Dato invalido", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            SistemaArchivos fs = ArchivoSistemaArchivos.cargar(archivoFs, cfg.tamanoSwap, cfg.posicionesPorCiclo,
+                    total, inicio);
             resultado = Cluster.crear(cfg, fs);
+            if (discoDetenido.isSelected()) {
+                resultado.detenerDisco(true);
+            }
             dispose();
         } catch (ErrorJson | IllegalArgumentException e) {
             JOptionPane.showMessageDialog(this, e.getMessage(), "No se pudo iniciar", JOptionPane.ERROR_MESSAGE);

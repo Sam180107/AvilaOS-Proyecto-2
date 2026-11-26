@@ -23,7 +23,16 @@ public final class ArchivoSistemaArchivos {
     }
 
     public static SistemaArchivos cargar(File archivo, int tamanoSwap, int posicionesPorCiclo) {
-        return desdeValor(Json.leerArchivo(archivo), tamanoSwap, posicionesPorCiclo);
+        return desdeValor(Json.leerArchivo(archivo), tamanoSwap, posicionesPorCiclo, -1, -1);
+    }
+
+    /**
+     * Igual que cargar, pero con el numero de bloques y el cabezal inicial
+     * elegidos en la configuracion. -1 deja el valor del JSON.
+     */
+    public static SistemaArchivos cargar(File archivo, int tamanoSwap, int posicionesPorCiclo,
+                                         int totalBloques, int cabezalInicial) {
+        return desdeValor(Json.leerArchivo(archivo), tamanoSwap, posicionesPorCiclo, totalBloques, cabezalInicial);
     }
 
     /**
@@ -31,18 +40,19 @@ public final class ArchivoSistemaArchivos {
      * ErrorJson con un mensaje que se le puede mostrar al usuario.
      */
     public static SistemaArchivos desdeTexto(String json, int tamanoSwap, int posicionesPorCiclo) {
-        return desdeValor(Json.leer(json), tamanoSwap, posicionesPorCiclo);
+        return desdeValor(Json.leer(json), tamanoSwap, posicionesPorCiclo, -1, -1);
     }
 
-    private static SistemaArchivos desdeValor(ValorJson raiz, int tamanoSwap, int posicionesPorCiclo) {
+    private static SistemaArchivos desdeValor(ValorJson raiz, int tamanoSwap, int posicionesPorCiclo,
+                                              int totalBloques, int cabezalInicial) {
         if (raiz.getTipo() != TipoJson.OBJETO) {
             throw new ErrorJson("El JSON del sistema de archivos debe ser un objeto");
         }
         ValorJson config = raiz.objetoEn("diskConfig");
         Disco disco;
         try {
-            disco = new Disco(config.enteroEn("totalBlocks"), tamanoSwap,
-                    config.enteroEn("initialHead", 0), posicionesPorCiclo);
+            disco = new Disco(totalBloques >= 0 ? totalBloques : config.enteroEn("totalBlocks"), tamanoSwap,
+                    cabezalInicial >= 0 ? cabezalInicial : config.enteroEn("initialHead", 0), posicionesPorCiclo);
         } catch (IllegalArgumentException e) {
             throw new ErrorJson("diskConfig: " + e.getMessage());
         }
