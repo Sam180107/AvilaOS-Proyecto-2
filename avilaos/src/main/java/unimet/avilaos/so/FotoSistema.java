@@ -3,6 +3,7 @@ package unimet.avilaos.so;
 import unimet.avilaos.hardware.ModoEjecucion;
 import unimet.avilaos.so.planificacion.TipoPolitica;
 import unimet.avilaos.so.proceso.EstadoProceso;
+import unimet.avilaos.so.proceso.TransitoSwap;
 import unimet.avilaos.so.proceso.PCB;
 
 /** Copia del estado del sistema operativo para que la GUI la pinte sin trancar la simulacion. */
@@ -27,6 +28,8 @@ public class FotoSistema {
     public Object[][] listosSuspendidos;
     public Object[][] bloqueadosSuspendidos;
     public Object[][] terminados;
+    public long suspensiones;
+    public long reactivaciones;
 
     public static Object[] fila(PCB p) {
         String extra;
@@ -38,6 +41,9 @@ public class FotoSistema {
             extra = p.getFase() + " (" + p.getElementosHechos() + "/" + p.getElementosRequeridos() + ")";
         } else {
             extra = "-";
+        }
+        if (p.getTransitoSwap() != TransitoSwap.NINGUNO) {
+            extra += " | " + p.getTransitoSwap().getEtiqueta();
         }
         Object deadline = p.getEstado() == EstadoProceso.TERMINADO
                 ? (p.isTerminadoPorDeadline() ? "VENCIDO" : "OK")

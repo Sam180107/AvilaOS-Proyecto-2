@@ -30,10 +30,12 @@ import unimet.avilaos.so.proceso.FaseProductorConsumidor;
 import unimet.avilaos.so.proceso.MotivoBloqueo;
 import unimet.avilaos.so.proceso.PCB;
 import unimet.avilaos.so.proceso.TipoProceso;
+import unimet.avilaos.so.proceso.TransitoSwap;
 
 /**
- * Sistema operativo de un computador: admision (largo plazo), intercambio Swap
+ * Sistema operativo de un computador: admision (largo plazo), suspension
  * (mediano plazo con 7 estados), planificacion (corto plazo) y E/S de disco.
+ * Suspender y reactivar son solicitudes de E/S que pasan por la cola del disco.
  */
 public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupciones, OyenteDisco {
 
@@ -67,6 +69,12 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
     private final Mutex candado = new Mutex();
     private final Mutex candadoBuzon = new Mutex();
     private Cola<Aviso> buzon = new Cola<>();
+    private Cola<SolicitudES> swapTerminados = new Cola<>();
+
+    private PCB avisadoSinRam;
+    private PCB beneficiario;
+    private long suspensiones;
+    private long reactivaciones;
 
     private MotivoBloqueo bloqueoPendiente = MotivoBloqueo.NINGUNO;
     private int ciclosBloqueoPendiente;
@@ -128,6 +136,16 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
 
     @Override
     public void solicitudCompletada(SolicitudES solicitud, long ciclo) {
+        if (!solicitud.getOperacion().esDeArchivo()) {
+            // suspender o reactivar: lo termina el SO en su proximo ciclo
+            candadoBuzon.cerrar();
+            try {
+                swapTerminados.encolar(solicitud);
+            } finally {
+                candadoBuzon.abrir();
+            }
+            return;
+        }
         SistemaArchivos fs = archivos;
         if (fs != null && solicitud.getOperacion().esDeArchivo()) {
             String efecto = fs.aplicar(solicitud, ciclo);
@@ -146,8 +164,7 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
             nuevos.encolar(pcb);
             log.registrar("Computador " + computador + ": llega " + pcb.getEtiqueta()
                     + " (" + pcb.getNombre() + ", " + pcb.getTipo().getEtiqueta() + ")");
-            planificarMedianoPlazo(ciclo);
-            revisarMemoria(ciclo);
+            gestionarMemoria(ciclo);
         } finally {
             candado.abrir();
         }
@@ -213,9 +230,9 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
             solicitudPendiente = null;
             actualizarQuantum();
             atenderBuzon();
+            atenderSwapTerminados(ciclo);
             revisarDeadlines(ciclo);
-            planificarMedianoPlazo(ciclo);
-            revisarMemoria(ciclo);
+            gestionarMemoria(ciclo);
             planificar(ciclo);
         } finally {
             candado.abrir();
@@ -318,103 +335,235 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
     }
 
     /**
-     * Planificador de mediano plazo (Swap-Out / Swap-In):
-     * 1) Si hay procesos esperando en Nuevos o Listos/Suspendidos sin RAM suficiente,
-     *    suspende procesos Bloqueados hacia el area de intercambio (Swap) en disco.
-     * 2) Si queda RAM libre, reactiva procesos desde Listo/Suspendido (Swap-In).
+     * Termina lo que el disco ya hizo con el area de intercambio. Una
+     * suspension libera la RAM cuando el proceso quedo escrito en el swap;
+     * una reactivacion devuelve el proceso a Listo cuando ya se leyo.
      */
-    private void planificarMedianoPlazo(long ciclo) {
-        SistemaArchivos fs = archivos;
-        Disco disco = fs != null ? fs.getDisco() : null;
-        if (disco == null || disco.getTamanoSwap() <= 0) {
-            return;
+    private void atenderSwapTerminados(long ciclo) {
+        Cola<SolicitudES> hechas;
+        candadoBuzon.cerrar();
+        try {
+            hechas = swapTerminados;
+            swapTerminados = new Cola<>();
+        } finally {
+            candadoBuzon.abrir();
         }
-
-        // Swap-Out de procesos bloqueados si hay procesos esperando RAM
-        while ((!nuevos.estaVacia() || !listosSuspendidos.estaVacia()) && !bloqueados.estaVacia()) {
-            int memNecesaria = !listosSuspendidos.estaVacia()
-                    ? listosSuspendidos.verPrimero().getMemoria()
-                    : nuevos.verFrente().getMemoria();
-            if (ram.hayEspacio(memNecesaria)) {
-                break;
+        while (!hechas.estaVacia()) {
+            SolicitudES s = hechas.desencolar();
+            PCB p = s.getPcb();
+            if (p == null || p.getEstado() == EstadoProceso.TERMINADO) {
+                continue; // murio mientras el disco lo atendia
             }
-            PCB candidato = bloqueados.verFrente();
-            if (disco.swapLibre() < candidato.getMemoria()) {
-                break;
+            if (s.getOperacion() == TipoOperacionES.SUSPENDER && p.getTransitoSwap() == TransitoSwap.SALIENDO) {
+                p.setTransitoSwap(TransitoSwap.NINGUNO);
+                ram.liberar(p.getMemoria());
+                suspensiones++;
+                log.registrar("Computador " + computador + ": " + p.getEtiqueta()
+                        + " quedo escrito en el area de intercambio (" + s.cantidadBloques()
+                        + " bloques) y libera " + p.getMemoria() + " de RAM (libre: " + ram.getLibre() + ")");
+            } else if (s.getOperacion() == TipoOperacionES.REACTIVAR
+                    && p.getTransitoSwap() == TransitoSwap.ENTRANDO) {
+                p.setTransitoSwap(TransitoSwap.NINGUNO);
+                if (p.getBloqueSwap() >= 0) {
+                    archivos.getDisco().liberarCadena(p.getBloqueSwap());
+                    p.setBloqueSwap(-1);
+                }
+                reactivaciones++;
+                if (p.getEstado() == EstadoProceso.LISTO_SUSPENDIDO) {
+                    listosSuspendidos.eliminar(p);
+                    p.cambiarEstado(EstadoProceso.LISTO, ciclo);
+                    listos.insertar(p);
+                    listos.reordenar();
+                    log.registrar("Computador " + computador + ": " + p.getEtiqueta()
+                            + " vuelve a la RAM desde el area de intercambio -> Listo");
+                } else if (p.getEstado() == EstadoProceso.BLOQUEADO_SUSPENDIDO) {
+                    bloqueadosSuspendidos.eliminar(p);
+                    p.cambiarEstado(EstadoProceso.BLOQUEADO, ciclo);
+                    bloqueados.encolar(p);
+                    log.registrar("Computador " + computador + ": " + p.getEtiqueta()
+                            + " vuelve a la RAM desde el area de intercambio -> Bloqueado");
+                }
             }
-            bloqueados.desencolar();
-            int bloqueSwap = disco.asignarSwap(candidato.getEtiqueta(), candidato.getMemoria());
-            candidato.setBloqueSwap(bloqueSwap);
-            ram.liberar(candidato.getMemoria());
-            candidato.cambiarEstado(EstadoProceso.BLOQUEADO_SUSPENDIDO, ciclo);
-            bloqueadosSuspendidos.encolar(candidato);
-            log.registrar("Computador " + computador + " suspende (Swap-Out) a " + candidato.getEtiqueta()
-                    + " -> Bloqueado/Suspendido (bloque swap " + bloqueSwap + ")");
-        }
-
-        // Swap-In de procesos en Listo/Suspendido cuando hay RAM disponible
-        while (!listosSuspendidos.estaVacia()) {
-            PCB p = listosSuspendidos.verPrimero();
-            if (!ram.hayEspacio(p.getMemoria())) {
-                break;
-            }
-            listosSuspendidos.extraerPrimero();
-            if (p.getBloqueSwap() >= 0) {
-                disco.liberarCadena(p.getBloqueSwap());
-                p.setBloqueSwap(-1);
-            }
-            ram.asignar(p.getMemoria());
-            p.cambiarEstado(EstadoProceso.LISTO, ciclo);
-            listos.insertar(p);
-            log.registrar("Computador " + computador + " reactiva (Swap-In) a " + p.getEtiqueta()
-                    + " -> Listo (RAM libre: " + ram.getLibre() + ")");
-        }
-
-        // Swap-In de Bloqueado/Suspendido si sobra RAM y nadie en Listo/Suspendido ni Nuevo espera
-        while (nuevos.estaVacia() && listosSuspendidos.estaVacia() && !bloqueadosSuspendidos.estaVacia()) {
-            PCB p = bloqueadosSuspendidos.verFrente();
-            if (!ram.hayEspacio(p.getMemoria())) {
-                break;
-            }
-            bloqueadosSuspendidos.desencolar();
-            if (p.getBloqueSwap() >= 0) {
-                disco.liberarCadena(p.getBloqueSwap());
-                p.setBloqueSwap(-1);
-            }
-            ram.asignar(p.getMemoria());
-            MotivoBloqueo motivoPrevio = p.getMotivoBloqueo();
-            p.bloquear(motivoPrevio, ciclo);
-            bloqueados.encolar(p);
-            log.registrar("Computador " + computador + " reactiva (Swap-In) a " + p.getEtiqueta()
-                    + " -> Bloqueado");
         }
     }
 
-    /** Largo plazo: pasa de Nuevo a Listo si cabe en RAM, o a Listo/Suspendido en Swap si no cabe. */
-    private void revisarMemoria(long ciclo) {
+    /**
+     * Planificadores de largo y mediano plazo.
+     *
+     * Quien espera RAM, en orden: los Listo/Suspendido (ya avanzaron y solo
+     * les falta volver) y despues los Nuevos de la cola de largo plazo, en
+     * orden de llegada. Si el primero de esa fila no cabe, el mediano plazo
+     * suspende procesos Bloqueados para hacerle espacio, y la RAM que se
+     * libera queda apartada para el (el "beneficiario") hasta que entre.
+     */
+    private void gestionarMemoria(long ciclo) {
         SistemaArchivos fs = archivos;
         Disco disco = fs != null ? fs.getDisco() : null;
-        Cola<PCB> siguen = new Cola<>();
-        while (!nuevos.estaVacia()) {
-            PCB p = nuevos.desencolar();
-            if (ram.hayEspacio(p.getMemoria())) {
-                ram.asignar(p.getMemoria());
-                p.cambiarEstado(EstadoProceso.LISTO, ciclo);
-                listos.insertar(p);
-                log.registrar("Computador " + computador + " admite " + p.getEtiqueta()
-                        + " (RAM libre: " + ram.getLibre() + ")");
-            } else if (disco != null && disco.getTamanoSwap() > 0 && disco.swapLibre() >= p.getMemoria()) {
-                int bloqueSwap = disco.asignarSwap(p.getEtiqueta(), p.getMemoria());
-                p.setBloqueSwap(bloqueSwap);
-                p.cambiarEstado(EstadoProceso.LISTO_SUSPENDIDO, ciclo);
-                listosSuspendidos.insertar(p);
-                log.registrar("Computador " + computador + " admite " + p.getEtiqueta()
-                        + " en Swap -> Listo/Suspendido (bloque swap " + bloqueSwap + ")");
+        boolean hayMedianoPlazo = disco != null && planificadorDisco != null && disco.getTamanoSwap() > 0;
+        if (beneficiario != null && !esperaRam(beneficiario)) {
+            beneficiario = null;
+        }
+        // 1) el beneficiario entra en cuanto quepa
+        int presupuesto = ram.getLibre();
+        if (beneficiario != null) {
+            if (ram.hayEspacio(beneficiario.getMemoria())) {
+                darRam(beneficiario, disco, ciclo);
+                beneficiario = null;
+                presupuesto = ram.getLibre();
             } else {
-                siguen.encolar(p);
+                // lo que esta saliendo al swap mas lo libre tiene que alcanzarle
+                int sobra = ram.getLibre() + ramSaliendo() - beneficiario.getMemoria();
+                presupuesto = Math.max(0, Math.min(ram.getLibre(), sobra));
             }
         }
-        nuevos = siguen;
+        // 2) los demas, con la RAM que no esta apartada
+        if (hayMedianoPlazo) {
+            ListaEnlazada<PCB> entran = new ListaEnlazada<>();
+            Recorrido<PCB> r = listosSuspendidos.recorrido();
+            while (r.haySiguiente()) {
+                PCB p = r.siguiente();
+                if (p != beneficiario && p.getTransitoSwap() == TransitoSwap.NINGUNO
+                        && p.getMemoria() <= presupuesto) {
+                    entran.agregarAlFinal(p);
+                    presupuesto -= p.getMemoria();
+                }
+            }
+            Recorrido<PCB> e = entran.recorrido();
+            while (e.haySiguiente()) {
+                darRam(e.siguiente(), disco, ciclo);
+            }
+        }
+        while (!nuevos.estaVacia() && nuevos.verFrente() != beneficiario
+                && nuevos.verFrente().getMemoria() <= presupuesto) {
+            PCB p = nuevos.verFrente();
+            presupuesto -= p.getMemoria();
+            darRam(p, disco, ciclo);
+        }
+        avisarSinRam();
+        // 3) si nadie tiene espacio apartado, se busca a quien hacerle espacio
+        if (hayMedianoPlazo && beneficiario == null) {
+            PCB primero = primeroEnEsperarRam();
+            if (primero != null && !ram.hayEspacio(primero.getMemoria()) && suspenderPara(primero, disco, ciclo)) {
+                beneficiario = primero;
+            }
+        }
+    }
+
+    /** Sigue esperando RAM: Nuevo sin admitir, o Listo/Suspendido sin reactivacion en curso. */
+    private static boolean esperaRam(PCB p) {
+        return p.getEstado() == EstadoProceso.NUEVO
+                || (p.getEstado() == EstadoProceso.LISTO_SUSPENDIDO && p.getTransitoSwap() == TransitoSwap.NINGUNO);
+    }
+
+    private PCB primeroEnEsperarRam() {
+        Recorrido<PCB> r = listosSuspendidos.recorrido();
+        while (r.haySiguiente()) {
+            PCB p = r.siguiente();
+            if (p.getTransitoSwap() == TransitoSwap.NINGUNO) {
+                return p;
+            }
+        }
+        return nuevos.estaVacia() ? null : nuevos.verFrente();
+    }
+
+    /** Admite a un Nuevo (largo plazo) o empieza a reactivar a un Listo/Suspendido (mediano plazo). */
+    private void darRam(PCB p, Disco disco, long ciclo) {
+        if (p.getEstado() == EstadoProceso.NUEVO) {
+            nuevos.eliminar(p);
+            ram.asignar(p.getMemoria());
+            p.cambiarEstado(EstadoProceso.LISTO, ciclo);
+            listos.insertar(p);
+            log.registrar("Computador " + computador + " admite " + p.getEtiqueta()
+                    + " (RAM libre: " + ram.getLibre() + ")");
+            return;
+        }
+        ram.asignar(p.getMemoria()); // se aparta ya para que nadie mas la tome
+        p.setTransitoSwap(TransitoSwap.ENTRANDO);
+        log.registrar("Se reactiva al proceso " + p.getEtiqueta() + ": hay RAM para el y se pide al disco"
+                + " leerlo del area de intercambio (bloque " + p.getBloqueSwap() + ")");
+        planificadorDisco.encolar(new SolicitudES(TipoOperacionES.REACTIVAR, "swap/" + p.getEtiqueta(),
+                disco.cadena(p.getBloqueSwap()), p.getId(), p.getEtiqueta(), p, ciclo));
+    }
+
+    private void avisarSinRam() {
+        if (nuevos.estaVacia()) {
+            return;
+        }
+        PCB p = nuevos.verFrente();
+        if (p != avisadoSinRam) {
+            avisadoSinRam = p;
+            log.registrar("Computador " + computador + ": " + p.getEtiqueta() + " no cabe en la RAM (pide "
+                    + p.getMemoria() + ", libre " + ram.getLibre() + ") y espera en la cola de largo plazo");
+        }
+    }
+
+    /**
+     * Suspende procesos Bloqueados para hacerle espacio a quien espera,
+     * primero el que lleva mas tiempo bloqueado: es el que menos
+     * probabilidad tiene de necesitar la CPU pronto. La suspension es una
+     * escritura en el swap (solicitud SUSPENDER) que pasa por la cola del
+     * disco; la RAM se libera cuando el disco termina.
+     *
+     * @return true si con lo que ya va saliendo, o con lo que se suspende ahora, va a caber.
+     */
+    private boolean suspenderPara(PCB esperando, Disco disco, long ciclo) {
+        int necesita = esperando.getMemoria();
+        int vaASobrar = ram.getLibre() + ramSaliendo();
+        if (vaASobrar >= necesita) {
+            return true;
+        }
+        // solo se suspende si con los bloqueados de ahora alcanza; si no, no vale la pena
+        ListaEnlazada<PCB> victimas = new ListaEnlazada<>();
+        int swapLibre = disco.swapLibre();
+        Recorrido<PCB> r = bloqueados.recorrido();
+        while (r.haySiguiente() && vaASobrar < necesita) {
+            PCB b = r.siguiente();
+            if (b.getMemoria() <= swapLibre) {
+                victimas.agregarAlFinal(b);
+                vaASobrar += b.getMemoria();
+                swapLibre -= b.getMemoria();
+            }
+        }
+        if (vaASobrar < necesita) {
+            return false;
+        }
+        String para = esperando.getEstado() == EstadoProceso.NUEVO ? "admitir" : "reactivar";
+        Recorrido<PCB> v = victimas.recorrido();
+        while (v.haySiguiente()) {
+            PCB b = v.siguiente();
+            bloqueados.eliminar(b);
+            int primero = disco.asignarSwap(b.getEtiqueta(), b.getMemoria());
+            b.setBloqueSwap(primero);
+            b.cambiarEstado(EstadoProceso.BLOQUEADO_SUSPENDIDO, ciclo);
+            b.setTransitoSwap(TransitoSwap.SALIENDO);
+            bloqueadosSuspendidos.encolar(b);
+            log.registrar("Se suspende al proceso " + b.getEtiqueta() + " para " + para + " a "
+                    + esperando.getEtiqueta() + " (lleva " + (ciclo - b.getBloqueadoDesde())
+                    + " ciclos bloqueado; va al area de intercambio desde el bloque " + primero + ")");
+            planificadorDisco.encolar(new SolicitudES(TipoOperacionES.SUSPENDER, "swap/" + b.getEtiqueta(),
+                    disco.cadena(primero), b.getId(), b.getEtiqueta(), b, ciclo));
+        }
+        return true;
+    }
+
+    /** RAM que van a soltar los procesos que el disco esta escribiendo en el swap. */
+    private int ramSaliendo() {
+        int total = 0;
+        Recorrido<PCB> r = bloqueadosSuspendidos.recorrido();
+        while (r.haySiguiente()) {
+            PCB p = r.siguiente();
+            if (p.getTransitoSwap() == TransitoSwap.SALIENDO) {
+                total += p.getMemoria();
+            }
+        }
+        Recorrido<PCB> l = listosSuspendidos.recorrido();
+        while (l.haySiguiente()) {
+            PCB p = l.siguiente();
+            if (p.getTransitoSwap() == TransitoSwap.SALIENDO) {
+                total += p.getMemoria();
+            }
+        }
+        return total;
     }
 
     private void planificar(long ciclo) {
@@ -632,7 +781,10 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
 
     private void terminar(PCB p, boolean porDeadline) {
         boolean estabaSuspendido = p.estaSuspendido();
-        boolean teniaRam = p.getEstado() != EstadoProceso.NUEVO && !estabaSuspendido;
+        // si el disco lo esta escribiendo o leyendo del swap, todavia ocupa (o tiene apartada) su RAM
+        boolean teniaRam = (p.getEstado() != EstadoProceso.NUEVO && !estabaSuspendido)
+                || p.getTransitoSwap() != TransitoSwap.NINGUNO;
+        p.setTransitoSwap(TransitoSwap.NINGUNO);
         if (cpu.getActual() == p) {
             cpu.liberar();
         }
@@ -664,8 +816,7 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
         estadisticas.registrarFin(p, ciclo);
         log.registrar("Computador " + computador + ": " + p.getEtiqueta()
                 + (porDeadline ? " TERMINADO por deadline vencido" : " termina"));
-        planificarMedianoPlazo(ciclo);
-        revisarMemoria(ciclo);
+        gestionarMemoria(ciclo);
     }
 
     private void liberarBuffer(PCB p) {
@@ -740,6 +891,8 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
             f.listosSuspendidos = filas(listosSuspendidos.recorrido(), listosSuspendidos.tamano());
             f.bloqueadosSuspendidos = filas(bloqueadosSuspendidos.recorrido(), bloqueadosSuspendidos.tamano());
             f.terminados = filas(terminados.recorrido(), terminados.tamano());
+            f.suspensiones = suspensiones;
+            f.reactivaciones = reactivaciones;
             return f;
         } finally {
             candado.abrir();
@@ -753,6 +906,26 @@ public class SistemaOperativo implements ComponenteDeReloj, ManejadorInterrupcio
             out[i++] = FotoSistema.fila(r.siguiente());
         }
         return out;
+    }
+
+    /** Procesos que el disco termino de escribir en el area de intercambio. */
+    public long getSuspensiones() {
+        candado.cerrar();
+        try {
+            return suspensiones;
+        } finally {
+            candado.abrir();
+        }
+    }
+
+    /** Procesos que el disco termino de leer del area de intercambio y volvieron a la RAM. */
+    public long getReactivaciones() {
+        candado.cerrar();
+        try {
+            return reactivaciones;
+        } finally {
+            candado.abrir();
+        }
     }
 
     public DispositivoES getES() { return es; }
