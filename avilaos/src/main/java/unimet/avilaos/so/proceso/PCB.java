@@ -3,6 +3,7 @@ package unimet.avilaos.so.proceso;
 import unimet.avilaos.hardware.disco.TipoOperacionES;
 import unimet.avilaos.sincronizacion.BufferAcotado;
 import unimet.avilaos.so.archivos.ModoUsuario;
+import unimet.avilaos.so.archivos.Permiso;
 
 /**
  * Ficha de un proceso: id, estado, prioridad, deadline, memoria, PC, MAR y
@@ -37,6 +38,9 @@ public class PCB {
     private long ciclosEnBloqueadoSuspendido = 0;
 
     private int bloqueSwap = -1;
+    private TransitoSwap transitoSwap = TransitoSwap.NINGUNO;
+    private Permiso nuevoPermiso;
+    private String duenoNuevo;
 
     private int mar = 0;
     private int ciclosEnCpu = 0;
@@ -266,6 +270,16 @@ public class PCB {
 
     public int getBloqueSwap() { return bloqueSwap; }
     public void setBloqueSwap(int bloqueSwap) { this.bloqueSwap = bloqueSwap; }
+    public TransitoSwap getTransitoSwap() { return transitoSwap; }
+    public void setTransitoSwap(TransitoSwap t) { transitoSwap = t == null ? TransitoSwap.NINGUNO : t; }
+
+    /** Al crear: permiso inicial. Al actualizar: permiso nuevo. null si no aplica. */
+    public Permiso getNuevoPermiso() { return nuevoPermiso; }
+    public void setNuevoPermiso(Permiso p) { nuevoPermiso = p; }
+
+    /** Dueno del archivo o directorio que se crea (solo lo elige el administrador). */
+    public String getDuenoNuevo() { return duenoNuevo; }
+    public void setDuenoNuevo(String d) { duenoNuevo = d == null || d.trim().isEmpty() ? null : d.trim(); }
 
     public int getMar() { return mar; }
     public int getCiclosEnCpu() { return ciclosEnCpu; }
